@@ -1,0 +1,29 @@
+Feb 23 10:15:32 web-server sshd[2341]: Connection closed by 192.168.1.105 port 52341 [preauth]
+Feb 23 10:15:33 web-server sshd[2342]: Invalid user admin from 192.168.1.105 port 52341
+Feb 23 10:15:33 web-server sshd[2342]: Connection closed by 192.168.1.105 port 52341 [preauth]
+Feb 23 10:15:34 web-server sshd[2343]: Received disconnect from 192.168.1.105 port 52342: 11: Bye Bye [preauth]
+Feb 23 10:15:35 web-server sshd[2344]: Timeout, client not responding.
+Feb 23 10:15:36 web-server sshd[2345]: Timeout, client not responding.
+Feb 23 10:15:37 web-server sshd[2346]: Timeout, client not responding.
+Feb 23 10:15:38 web-server sshd[2347]: Received disconnect from 192.168.1.105 port 52346: 0: [preauth]
+Feb 23 10:15:39 web-server sshd[2348]: Connection reset by 192.168.1.105 port 52347 [preauth]
+Feb 23 10:15:40 web-server sshd[2349]: Connection closed by 192.168.1.105 port 52348 [preauth]
+Feb 23 10:15:41 web-server sshd[2350]: Connection closed by 192.168.1.105 port 52349 [preauth]
+Feb 23 10:15:42 web-server sshd[2351]: Connection closed by 192.168.1.105 port 52350 [preauth]
+Feb 23 10:15:43 web-server sshd[2352]: Connection closed by 192.168.1.105 port 52351 [preauth]
+Feb 23 10:16:01 web-server sshd[2353]: Connection closed by 192.168.1.105 port 52352 [preauth]
+Feb 23 10:16:02 web-server sshd[2354]: Connection closed by 192.168.1.105 port 52353 [preauth]
+Feb 23 10:16:03 web-server sshd[2355]: Connection closed by 192.168.1.105 port 52354 [preauth]
+Feb 23 10:16:04 web-server sshd[2356]: Connection closed by 192.168.1.105 port 52355 [preauth]
+Feb 23 10:16:10 web-server sshd[2357]: Connection closed by 192.168.1.110 port 48123 [preauth]
+Feb 23 10:16:11 web-server sshd[2358]: Invalid user root from 192.168.1.110 port 48124
+Feb 23 10:16:11 web-server sshd[2358]: Connection closed by 192.168.1.110 port 48124 [preauth]
+Feb 23 10:16:12 web-server sshd[2359]: Connection closed by 192.168.1.110 port 48125 [preauth]
+Feb 23 10:16:20 web-server sshd[2360]: Connection closed by 10.0.0.50 port 55123 [preauth]
+Feb 23 10:16:21 web-server sshd[2361]: Connection closed by 10.0.0.50 port 55124 [preauth]
+Feb 23 10:16:22 web-server sshd[2362]: Connection closed by 10.0.0.50 port 55125 [preauth]
+Feb 23 10:17:10 web-server sshd[2363]: Connection closed by 192.168.1.105 port 52359 [preauth]
+Feb 23 10:17:11 web-server sshd[2364]: Connection closed by 192.168.1.105 port 52360 [preauth]
+Feb 23 10:17:12 web-server sshd[2365]: Connection closed by 192.168.1.105 port 52361 [preauth]
+Feb 23 10:18:05 web-server sshd[2366]: Accepted publickey for sysadmin from 192.168.1.50 port 49321 ssh2: RSA SHA256:zf1Yad5Gly/0Hj6YKLRUmVhZ9qlVZ0gPpR2m5KxBc0k
+Feb 23 10:18:06 web-server sshd[2366]: pam_unix(sshd:session): session opened for user sysadmin by (uid=0)

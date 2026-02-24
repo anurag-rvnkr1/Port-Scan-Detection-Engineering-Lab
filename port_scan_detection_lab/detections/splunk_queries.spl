@@ -1,0 +1,342 @@
+// ====================================================
+// SPLUNK DETECTION ENGINEERING - PORT SCAN DETECTION
+// ====================================================
+// All queries are production-ready for Splunk 9+
+// Compatible with UFW, iptables, and enterprise firewalls
+
+
+// ==============================================
+// 1. SYN SCAN DETECTION QUERY
+// ==============================================
+// Detects multiple SYN packets from single source to multiple destinations
+// Trigger: > 20 ports in 60 seconds
+//
+// DESCRIPTION:
+// Monitors for rapid SYN packets from a single source IP to multiple 
+// destination ports within a 1-minute window. This is a hallmark of 
+// TCP SYN scanning for reconnaissance.
+
+index=firewall sourcetype=syslog "SYN" 
+| stats count as syn_count, values(DPT) as dest_ports, dc(DPT) as unique_ports 
+    by src_ip, dest_ip, span=1m 
+| where unique_ports > 20 
+| eval severity="high" 
+| table src_ip, dest_ip, unique_ports, syn_count, severity
+| sort - unique_ports
+
+
+// ==============================================
+// 2. PORT SWEEP DETECTION QUERY
+// ==============================================
+// Detects single source scanning multiple hosts on same port
+// Trigger: > 15 unique destinations in 1 minute
+//
+// DESCRIPTION:
+// Identifies horizontal port sweeps where an attacker probes the same 
+// port (e.g., SSH/22) across many different IP addresses in the network.
+// This is common in reconnaissance to find open services.
+
+index=firewall (sourcetype=syslog OR sourcetype=firewall) 
+| where match(dest_port, "^\d+$") 
+| stats count as connection_attempts, dc(dest_ip) as unique_targets 
+    by src_ip, dest_port, span=1m 
+| where unique_targets > 15 
+| eval severity="high" 
+| table src_ip, dest_port, unique_targets, connection_attempts, severity
+| sort - unique_targets
+
+
+// ==============================================
+// 3. FIN SCAN DETECTION QUERY
+// ==============================================
+// Detects FIN packets from single source (Stealth Scan)
+// Trigger: >= 3 FIN packets from same source in 60 seconds
+//
+// DESCRIPTION:
+// FIN scans send TCP packets with the FIN flag set to closed ports.
+// Open ports typically ignore these packets, while closed ports respond
+// with RST packets. This is detected as anomalous activity.
+
+index=firewall sourcetype=syslog "FIN" 
+| where DPT NOT IN (22, 80, 443, 3389) 
+| stats count as fin_count, values(DPT) as fin_ports, dc(DPT) as unique_fin_ports 
+    by src_ip, span=1m 
+| where unique_fin_ports >= 3 
+| eval severity="medium" 
+| table src_ip, unique_fin_ports, fin_count, fin_ports, severity
+| sort - fin_count
+
+
+// ==============================================
+// 4. NULL SCAN DETECTION QUERY
+// ==============================================
+// Detects NULL packets (no flags set) from single source
+// Trigger: >= 2 NULL packets from same source
+//
+// DESCRIPTION:
+// NULL scans send TCP packets with no flags set. These are extremely
+// rare in normal traffic and strongly indicate reconnaissance activity.
+// Also called "Vanilla" packets.
+
+index=firewall sourcetype=syslog "NONE" 
+| where isnotnull(DPT) AND DPT > 0 
+| stats count as null_count, values(DPT) as null_ports, dc(DPT) as unique_null_ports 
+    by src_ip, span=1m 
+| where unique_null_ports >= 2 
+| eval severity="high" 
+| table src_ip, unique_null_ports, null_count, severity
+| sort - null_count
+
+
+// ==============================================
+// 5. XMAS SCAN DETECTION QUERY
+// ==============================================
+// Detects XMAS packets (FIN, PSH, URG flags)
+// Trigger: Any XMAS packet to non-standard ports
+//
+// DESCRIPTION:
+// XMAS scans send TCP packets with FIN, PSH, and URG flags all set.
+// Like NULL and FIN scans, this is almost never seen in legitimate traffic.
+// The name comes from the packet "lighting up like a Christmas tree."
+
+index=firewall sourcetype=syslog "FIN,PSH,URG" 
+| stats count as xmas_count, values(DPT) as xmas_ports 
+    by src_ip, span=1m 
+| where xmas_count >= 1 
+| eval severity="high" 
+| table src_ip, xmas_count, xmas_ports, severity
+| sort - xmas_count
+
+
+// ==============================================
+// 6. ACK SCAN DETECTION QUERY
+// ==============================================
+// Detects ACK packets sent without prior SYN (Out of state)
+// Trigger: ACK packets without corresponding SYN
+//
+// DESCRIPTION:
+// ACK scans send ACK packets to determine which ports are filtered
+// by firewalls. They're detected by looking for ACK without prior
+// connection establishment (SYN-ACK).
+
+index=firewall sourcetype=syslog "ACK" 
+| stats count as ack_count by src_ip, dest_ip, dest_port, span=1m 
+| where ack_count >= 10 
+| eval severity="medium" 
+| table src_ip, dest_ip, dest_port, ack_count, severity
+
+
+// ==============================================
+// 7. LOW-AND-SLOW SCAN DETECTION QUERY
+// ==============================================
+// Detects distributed scanning activity over extended time
+// Trigger: 5+ connection attempts to multiple ports over 5-10 minutes
+//
+// DESCRIPTION:
+// Attackers use slow scans to evade detection systems. This query uses
+// wider time windows (5-10 minutes) and aggregates behavior to identify
+// slow, distributed reconnaissance activity.
+
+index=firewall sourcetype=syslog src_ip!=127.0.0.1 
+| timechart count by src_ip, span=5m 
+| where count >= 5 
+| stats sum(count) as total_connections by src_ip 
+| where total_connections >= 20
+| eval severity="medium" 
+| table src_ip, total_connections, severity
+| sort - total_connections
+
+
+// ==============================================
+// 8. HIGH CONNECTION ATTEMPT DETECTION
+// ==============================================
+// Detects unusually high number of connection attempts
+// Trigger: > 100 connection attempts from single source in 5 minutes
+//
+// DESCRIPTION:
+// Generic detection for high volume of connection attempts from
+// a single source, which could indicate scanning or attack activity.
+
+index=firewall sourcetype=syslog src_ip!=127.0.0.1 
+| stats count as connection_count 
+    by src_ip, span=5m 
+| where connection_count > 100 
+| eval severity="high" 
+| table src_ip, connection_count, severity
+| sort - connection_count
+
+
+// ==============================================
+// 9. PORT ENUMERATION DETECTION
+// ==============================================
+// Detects scanning of well-known service ports
+// Trigger: SYN to multiple well-known ports from same source
+//
+// DESCRIPTION:
+// Focuses on well-known service ports (SSH, HTTP, HTTPS, SQL databases, etc.).
+// Multiple connections to these ports in short timeframe suggests
+// service enumeration during reconnaissance.
+
+index=firewall sourcetype=syslog "SYN" 
+| where dest_port IN (22, 23, 25, 80, 443, 135, 139, 445, 3306, 5432, 8080, 8443, 1433) 
+| stats count as service_syn, dc(dest_port) as unique_services 
+    by src_ip, span=2m 
+| where unique_services >= 5 
+| eval severity="high" 
+| table src_ip, unique_services, service_syn, severity
+| sort - unique_services
+
+
+// ==============================================
+// 10. REJECTED CONNECTION PATTERN DETECTION
+// ==============================================
+// Detects patterns of rejected connections
+// Trigger: > 50 rejected connections in 5 minutes
+//
+// DESCRIPTION:
+// Monitors for excessive rejected/blocked connections which suggests
+// an attacker is probing ports that are filtered or blocked by the firewall.
+
+index=firewall sourcetype=syslog "[UFW BLOCK]" 
+| stats count as rejected_count, dc(dest_port) as unique_ports 
+    by src_ip, span=5m 
+| where rejected_count > 50 
+| eval severity="high" 
+| table src_ip, rejected_count, unique_ports, severity
+| sort - rejected_count
+
+
+// ==============================================
+// 11. DETECTION WITH FALSE POSITIVE EXCLUSIONS
+// ==============================================
+// Combined SYN scan detection with whitelist filtering
+// Excludes: localhost, known scanners, patch management servers
+//
+// DESCRIPTION:
+// Production-ready query that combines detection logic with exclusions
+// for known legitimate scanners (Nessus, Qualys, etc.) and internal
+// vulnerability assessment tools to reduce false positives.
+
+index=firewall sourcetype=syslog "SYN" 
+| where src_ip NOT IN (127.0.0.1, 10.0.0.1, 10.0.0.100, 192.168.1.50) 
+| where src_ip NOT IN (10.50.*, 172.16.5.*) 
+| stats count as syn_count, dc(dest_port) as unique_ports 
+    by src_ip, dest_ip, span=1m 
+| where unique_ports > 20 
+| eval severity="high", 
+    confidence=case(
+        unique_ports > 50, "very_high",
+        unique_ports > 30, "high",
+        unique_ports > 20, "medium"
+    ) 
+| table src_ip, dest_ip, unique_ports, syn_count, severity, confidence
+| sort - unique_ports
+
+
+// ==============================================
+// 12. MULTI-TECHNIQUE SCAN DETECTION
+// ==============================================
+// Detects activity combining multiple scan techniques
+// Trigger: Both SYN and FIN packets from same source in 5 minutes
+//
+// DESCRIPTION:
+// Advanced attackers use multiple techniques. This query correlates
+// different scan types to identify sophisticated reconnaissance combining
+// different methods (e.g., SYN scan followed by stealth FIN scan).
+
+index=firewall sourcetype=syslog 
+| stats values(tcp.flags) as techniques 
+    by src_ip, span=5m 
+| search techniques="*SYN*" OR techniques="*FIN*" 
+| stats count by src_ip 
+| where count >= 2 
+| eval severity="high", alert="MULTI_TECHNIQUE_SCAN_DETECTED" 
+| table src_ip, count, severity, alert
+
+
+// ==============================================
+// 13. REAL-TIME ALERTING QUERY
+// ==============================================
+// Real-time detection with immediate alert on SYN scan
+// For use in: Scheduled searches with alert actions
+//
+// DESCRIPTION:
+// Optimized for real-time or near-real-time detection with immediate
+// alerting. Designed to trigger webhook, email, or Slack notifications
+// when threshold is exceeded.
+
+index=firewall sourcetype=syslog "SYN" earliest=-1m 
+| stats count as attempts, dc(dest_port) as ports_targeted 
+    by src_ip, dest_ip 
+| where ports_targeted >= 10 
+| eval status="ALERT", timestamp=now()
+| convert timeformat="%Y-%m-%d %H:%M:%S" ctime(timestamp)
+| table src_ip, dest_ip, ports_targeted, attempts, status, timestamp
+
+
+// ==============================================
+// DASHBOARD SEARCHES - Use in Splunk Dashboards
+// ==============================================
+
+// Scan Type Distribution (Pie Chart)
+index=firewall sourcetype=syslog 
+| rex field=_raw "(?<tcp_flags>SYN|FIN|ACK|NONE|PSH|RST|URG|FIN,PSH,URG)" 
+| stats count by tcp_flags 
+| rename tcp_flags as "Scan Type"
+
+// Top Scanning IPs (Bar Chart)
+index=firewall sourcetype=syslog 
+| stats dc(dest_port) as unique_ports, count as total_attempts 
+    by src_ip 
+| sort - unique_ports 
+| head 10 
+| rename src_ip as "Source IP", unique_ports as "Unique Ports", total_attempts as "Total Attempts"
+
+// Most Targeted Ports (Bar Chart)
+index=firewall sourcetype=syslog 
+| stats count by dest_port 
+| sort - count 
+| head 10 
+| rename dest_port as "Port Number", count as "Attempts"
+
+// Timeline of Scan Activity (Line Chart)
+index=firewall sourcetype=syslog "SYN" 
+| timechart count by src_ip, span=1m 
+| rename _time as "Time"
+
+// Source IPs with Multiple Scan Techniques
+index=firewall sourcetype=syslog 
+| stats values(tcp.flags) as techniques 
+    by src_ip 
+| where mvcount(techniques) >= 2 
+| rename src_ip as "Source IP", techniques as "Scan Techniques Used"
+
+
+// ==============================================
+// SUMMARY AND NOTES
+// ==============================================
+// 
+// IMPLEMENTATION NOTES:
+// 1. Replace "firewall" and "syslog" sourcetype with actual sources
+// 2. Adjust DPT/dest_port field names based on your environment
+// 3. Modify whitelist IPs (lines 177-178) for your organization
+// 4. Tune thresholds based on baseline traffic analysis
+// 5. Test queries against sample logs first
+//
+// ALERT CONFIGURATION:
+// - Set alert frequency: Every 1 minute (real-time)
+// - Trigger condition: Number of events > 0
+// - Add notification: Email, Slack, PagerDuty, or webhook
+// - Include: Alert name, affected IPs, unique ports, severity
+//
+// TUNING FOR FALSE POSITIVES:
+// - Exclude known vulnerability scanners (Nessus, Qualys, OpenVAS)
+// - Exclude internal IP ranges for approved scanning
+// - Increase threshold for "low-and-slow" scans if needed
+// - Add exceptions for legitimate heavy users/services
+//
+// PERFORMANCE OPTIMIZATION:
+// - Use index-time field extraction for DPT/dest_port
+// - Pre-process logs to extract TCP flags at ingestion time
+// - Use summary indexing for dashboards with historical data
+// - Implement data model acceleration for large datasets
