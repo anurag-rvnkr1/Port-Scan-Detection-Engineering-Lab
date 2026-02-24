@@ -1,0 +1,289 @@
+===================================================================
+ELK KIBANA KQL (Kibana Query Language) - PORT SCAN DETECTION
+===================================================================
+Compatible with Elastic Stack 8.0+
+Use these queries in Kibana Discover, Alerts, and Rules
+
+
+===================================================================
+1. SYN SCAN DETECTION - KQL
+===================================================================
+Description: Detects multiple SYN packets from single source to multiple 
+destinations in 60-second window. Trigger: > 20 unique ports
+
+firewall.action : "BLOCK" AND network.protocol : "tcp" AND tcp.flags : "SYN" 
+  | stats unique_ports = count_distinct(destination.port), 
+           total_attempts = count(), 
+           targets = values(destination.ip) 
+    by source.ip, destination.ip
+  | where unique_ports > 20
+
+
+===================================================================
+2. PORT SWEEP DETECTION - KQL
+===================================================================
+Description: Horizontal port sweep - single source scanning multiple 
+hosts on same port. Trigger: > 15 unique destinations in 1 minute
+
+firewall.action : "BLOCK" AND network.protocol : "tcp"
+  | stats unique_targets = count_distinct(destination.ip),
+           connection_attempts = count(),
+           affected_ips = values(destination.ip)
+    by source.ip, destination.port
+  | where unique_targets > 15
+
+
+===================================================================
+3. FIN SCAN DETECTION - KQL
+===================================================================
+Description: FIN flag packets without normal three-way handshake.
+Trigger: >= 3 FIN packets from same source to non-standard ports
+
+firewall.action : "BLOCK" AND tcp.flags : "FIN" 
+  AND NOT (destination.port : (22 OR 80 OR 443 OR 3389))
+  | stats fin_packets = count(),
+           fin_ports = count_distinct(destination.port),
+           port_list = values(destination.port)
+    by source.ip
+  | where fin_packets >= 3
+
+
+===================================================================
+4. NULL SCAN DETECTION - KQL
+===================================================================
+Description: NULL packets (no TCP flags set) are extremely rare.
+Strongly indicates reconnaissance. Trigger: >= 2 NULL packets
+
+firewall.action : "BLOCK" AND tcp.flags : "NONE" 
+  AND destination.port > 0
+  | stats null_packets = count(),
+           null_ports = count_distinct(destination.port),
+           targets = values(destination.ip)
+    by source.ip
+  | where null_packets >= 2
+
+
+===================================================================
+5. XMAS SCAN DETECTION - KQL
+===================================================================
+Description: XMAS scans use FIN+PSH+URG flags simultaneously.
+Extremely rare in legitimate traffic.
+
+firewall.action : "BLOCK" AND tcp.flags : ("FIN" AND "PSH" AND "URG")
+  | stats xmas_count = count(),
+           xmas_ports = count_distinct(destination.port),
+           port_list = values(destination.port)
+    by source.ip
+  | where xmas_count >= 1
+
+
+===================================================================
+6. ACK SCAN DETECTION - KQL
+===================================================================
+Description: ACK packets sent without prior SYN (out-of-state).
+Used to map firewall rules.
+
+firewall.action : "BLOCK" AND tcp.flags : "ACK"
+  | stats ack_count = count(),
+           unique_ports = count_distinct(destination.port),
+           port_list = values(destination.port)
+    by source.ip, destination.ip
+  | where ack_count >= 10
+
+
+===================================================================
+7. HIGH CONNECTION ATTEMPT DETECTION - KQL
+===================================================================
+Description: Generic high-volume connection detection.
+Trigger: > 100 connection attempts from single source in 5 minutes
+
+firewall.action : "BLOCK" 
+  AND source.ip : (192.168.0.0/16 OR 10.0.0.0/8 OR 172.16.0.0/12)
+  AND NOT source.ip : (127.0.0.1)
+  | stats connection_count = count(),
+           unique_ports = count_distinct(destination.port),
+           unique_hosts = count_distinct(destination.ip)
+    by source.ip
+  | where connection_count > 100
+
+
+===================================================================
+8. PORT ENUMERATION - WELL-KNOWN SERVICES
+===================================================================
+Description: Scans targeting well-known service ports (SSH, HTTP, DB, etc).
+Trigger: SYN to 5+ well-known ports in 2 minutes
+
+firewall.action : "BLOCK" 
+  AND network.protocol : "tcp"
+  AND tcp.flags : "SYN"
+  AND destination.port : (22 OR 23 OR 25 OR 80 OR 443 OR 135 OR 139 OR 445 OR 3306 OR 5432 OR 8080 OR 8443 OR 1433)
+  | stats service_scans = count(),
+           services_targeted = count_distinct(destination.port),
+           port_list = values(destination.port)
+    by source.ip
+  | where services_targeted >= 5
+
+
+===================================================================
+9. REJECTED CONNECTION PATTERN - HIGH VOLUME
+===================================================================
+Description: Excessive rejected connections indicate port probing.
+Trigger: > 50 rejected connections in 5 minutes
+
+firewall.action : "BLOCK" 
+  | stats rejected_count = count(),
+           unique_ports = count_distinct(destination.port),
+           unique_hosts = count_distinct(destination.ip)
+    by source.ip
+  | where rejected_count > 50
+
+
+===================================================================
+10. LOW-AND-SLOW SCAN DETECTION
+===================================================================
+Description: Distributed scanning over extended time periods.
+Detects slow reconnaissance to evade detection systems.
+
+firewall.action : "BLOCK"
+  | stats scan_activity = count()
+    by source.ip
+  | where scan_activity >= 20 AND scan_activity <= 100
+
+
+===================================================================
+11. MULTI-TECHNIQUE SCAN DETECTION
+===================================================================
+Description: Detects combinations of different scan techniques.
+Indicates sophisticated attacker using multiple methods.
+
+firewall.action : "BLOCK"
+  | stats techniques = values(tcp.flags),
+           total_activity = count()
+    by source.ip
+  | where techniques contains "SYN" AND techniques contains "FIN"
+
+
+===================================================================
+12. OUTBOUND PORT SCAN DETECTION (DATA EXFILTRATION RISK)
+===================================================================
+Description: Source initiating outbound connections to many ports.
+Trigger: > 15 unique outbound ports in 5 minutes
+
+network.traffic_direction : "outbound"
+  AND NOT source.ip : (127.0.0.1 OR 10.0.0.1)
+  | stats outbound_ports = count_distinct(destination.port),
+           destination_ips = count_distinct(destination.ip),
+           total_attempts = count()
+    by source.ip
+  | where outbound_ports > 15
+
+
+===================================================================
+13. ADVANCED: WITH CONTEXT AND ENRICHMENT
+===================================================================
+Description: Combines detection with threat intelligence and context.
+Shows attacker IP reputation and potential impact.
+
+firewall.action : "BLOCK"
+  AND network.protocol : "tcp"
+  AND tcp.flags : "SYN"
+  | stats ports_targeted = count_distinct(destination.port),
+           unique_destinations = count_distinct(destination.ip),
+           attempt_count = count(),
+           first_seen = min(@timestamp),
+           last_seen = max(@timestamp)
+    by source.ip
+  | where ports_targeted > 20
+  | enrichment : geoip_lookup source.ip
+
+
+===================================================================
+14. REAL-TIME ALERT QUERY - VIA KQL
+===================================================================
+Description: Optimized for real-time alerting.
+Executes within last minute window.
+
+@timestamp : (now-1m TO now)
+  AND firewall.action : "BLOCK"
+  AND network.protocol : "tcp"
+  AND tcp.flags : "SYN"
+  | stats count_distinct(destination.port) as unique_ports,
+           count() as attempt_count
+    by source.ip
+  | where unique_ports >= 10
+
+
+===================================================================
+15. EXCLUDE FALSE POSITIVES - WHITELIST APPROACH
+===================================================================
+Description: Production query with known legitimate scanners excluded.
+Excludes: Nessus, Qualys, internal scanners, patch management.
+
+firewall.action : "BLOCK"
+  AND network.protocol : "tcp"
+  AND tcp.flags : "SYN"
+  AND NOT source.ip : (10.0.0.1 OR 10.0.0.100 OR 10.50.0.0/16 OR 192.168.1.50)
+  AND NOT source.geo.country_name : "Internal"
+  | stats unique_ports = count_distinct(destination.port),
+           total_attempts = count()
+    by source.ip
+  | where unique_ports > 20
+
+
+===================================================================
+KIBANA VISUALIZATION QUERIES
+===================================================================
+
+// Top Source IPs by Port Scan Activity
+terms:source.ip | metric count_distinct(destination.port)
+
+// Destination Ports Most Frequently Scanned
+terms:destination.port | metric count | top 10
+
+// Timeline of Scan Activity
+histogram:@timestamp | metric count | group by tcp.flags
+
+// Geographical Distribution of Scanning Sources
+geo:source.ip | metric count | group by source.geo.country_name
+
+// Service Port Targeting Pattern
+terms:destination.port | filter tcp.flags:"SYN" | top 15
+
+
+===================================================================
+NOTES FOR IMPLEMENTATION
+===================================================================
+
+Field Name Mapping:
+- Replace "tcp.flags" with your actual TCP flags field
+- Replace "destination.port" with "dest_port" if needed
+- Replace "source.ip" with "src_ip" if different
+- Replace "firewall.action" with actual firewall action field
+
+Index Selection:
+- Use index="firewall" if firewall logs are in separate index
+- Use index="*" to search all indices
+- Add index="logs-firewall*" for datastream format
+
+Time Window Specification:
+- @timestamp : (now-1h TO now) = last hour
+- @timestamp : (now-5m TO now) = last 5 minutes
+- Adjust based on detection latency requirements
+
+Alert Thresholds Tuning:
+- Test queries against baseline traffic first
+- Adjust "unique_ports > 20" threshold based on your environment
+- Consider peak hours vs. off-hours separately
+- Use outlier detection for adaptive thresholds
+
+Performance Optimization:
+- Pre-calculate frequently used metrics with dataframes
+- Use aggregation pipelines for large datasets
+- Index-time field extraction for critical fields
+- Consider tiered storage for historical data
+
+Correlation Rules:
+- Combine multiple queries for higher confidence alerts
+- Track source IP reputation over time
+- Correlate with user activity logs for context
+- Link to threat intelligence feeds for enrichment
