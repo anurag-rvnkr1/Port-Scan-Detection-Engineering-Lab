@@ -1,0 +1,502 @@
+{
+  "description": "Elastic Search DSL Queries for Port Scan Detection - Elasticsearch 8.0+ Compatible",
+  "note": "Use these queries with _search API or programmatically via clients",
+  
+  "1_syn_scan_detection": {
+    "description": "Detects SYN scan activity from single source to multiple ports",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } },
+          { "match": { "network.protocol": "tcp" } },
+          { "match": { "tcp.flags": "SYN" } }
+        ],
+        "filter": [
+          { "range": { "@timestamp": { "gte": "now-1m" } } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 100 },
+        "aggs": {
+          "unique_ports": {
+            "cardinality": { "field": "destination.port" }
+          },
+          "total_attempts": {
+            "value_count": { "field": "destination.port" }
+          },
+          "port_list": {
+            "terms": { "field": "destination.port", "size": 50 }
+          }
+        }
+      }
+    },
+    "post_filter": {
+      "range": {
+        "unique_ports": { "gte": 20 }
+      }
+    }
+  },
+
+  "2_port_sweep_detection": {
+    "description": "Detects horizontal port sweeps across multiple targets",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } },
+          { "match": { "network.protocol": "tcp" } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_and_port": {
+        "composite": {
+          "sources": [
+            { "source_ip": { "terms": { "field": "source.ip" } } },
+            { "dest_port": { "terms": { "field": "destination.port" } } }
+          ],
+          "size": 100
+        },
+        "aggs": {
+          "unique_targets": {
+            "cardinality": { "field": "destination.ip" }
+          },
+          "connection_attempts": {
+            "value_count": { "field": "destination.ip" }
+          }
+        }
+      }
+    }
+  },
+
+  "3_fin_scan_detection": {
+    "description": "Detects FIN flag packets indicating stealth reconnaissance",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } },
+          { "match": { "tcp.flags": "FIN" } }
+        ],
+        "must_not": [
+          { "terms": { "destination.port": [22, 80, 443, 3389] } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 50 },
+        "aggs": {
+          "fin_count": {
+            "value_count": { "field": "destination.port" }
+          },
+          "unique_fin_ports": {
+            "cardinality": { "field": "destination.port" }
+          },
+          "port_details": {
+            "terms": { "field": "destination.port", "size": 20 }
+          }
+        }
+      }
+    }
+  },
+
+  "4_null_scan_detection": {
+    "description": "Detects NULL packets (no TCP flags) - highly anomalous",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } },
+          { "match": { "tcp.flags": "NONE" } }
+        ],
+        "filter": [
+          { "range": { "destination.port": { "gt": 0 } } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 50 },
+        "aggs": {
+          "null_packet_count": {
+            "value_count": { "field": "destination.port" }
+          },
+          "unique_null_ports": {
+            "cardinality": { "field": "destination.port" }
+          }
+        }
+      }
+    }
+  },
+
+  "5_xmas_scan_detection": {
+    "description": "Detects XMAS scans (FIN+PSH+URG flags simultaneously)",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } },
+          { "terms": { "tcp.flags": ["FIN", "PSH", "URG"] } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 50 },
+        "aggs": {
+          "xmas_count": {
+            "value_count": { "field": "destination.port" }
+          }
+        }
+      }
+    }
+  },
+
+  "6_ack_scan_detection": {
+    "description": "Detects ACK scans used for firewall rule mapping",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } },
+          { "match": { "tcp.flags": "ACK" } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 50 },
+        "aggs": {
+          "ack_attempts": {
+            "value_count": { "field": "destination.port" }
+          },
+          "unique_ports": {
+            "cardinality": { "field": "destination.port" }
+          }
+        }
+      }
+    },
+    "post_filter": {
+      "range": {
+        "ack_attempts": { "gte": 10 }
+      }
+    }
+  },
+
+  "7_high_connection_attempts": {
+    "description": "Detects unusually high volume of connection attempts",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } }
+        ],
+        "filter": [
+          {
+            "bool": {
+              "should": [
+                { "range": { "source.ip": { "gte": "192.168.0.0", "lte": "192.168.255.255" } } },
+                { "range": { "source.ip": { "gte": "10.0.0.0", "lte": "10.255.255.255" } } },
+                { "range": { "source.ip": { "gte": "172.16.0.0", "lte": "172.31.255.255" } } }
+              ]
+            }
+          },
+          { "range": { "@timestamp": { "gte": "now-5m" } } }
+        ],
+        "must_not": [
+          { "match": { "source.ip": "127.0.0.1" } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 100 },
+        "aggs": {
+          "connection_count": {
+            "value_count": { "field": "destination.port" }
+          },
+          "unique_ports": {
+            "cardinality": { "field": "destination.port" }
+          },
+          "unique_hosts": {
+            "cardinality": { "field": "destination.ip" }
+          }
+        }
+      }
+    }
+  },
+
+  "8_port_enumeration_wellknown": {
+    "description": "Service enumeration - scanning well-known ports",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } },
+          { "match": { "network.protocol": "tcp" } },
+          { "match": { "tcp.flags": "SYN" } },
+          {
+            "terms": {
+              "destination.port": [22, 23, 25, 80, 443, 135, 139, 445, 3306, 5432, 8080, 8443, 1433]
+            }
+          }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 100 },
+        "aggs": {
+          "services_targeted": {
+            "cardinality": { "field": "destination.port" }
+          },
+          "service_scans": {
+            "value_count": { "field": "destination.port" }
+          },
+          "port_list": {
+            "terms": { "field": "destination.port", "size": 20 }
+          }
+        }
+      }
+    }
+  },
+
+  "9_rejected_connections_pattern": {
+    "description": "Excessive rejected connections indicating port probing",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } }
+        ],
+        "filter": [
+          { "range": { "@timestamp": { "gte": "now-5m" } } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 100 },
+        "aggs": {
+          "rejected_count": {
+            "value_count": { "field": "@timestamp" }
+          },
+          "unique_ports": {
+            "cardinality": { "field": "destination.port" }
+          },
+          "unique_hosts": {
+            "cardinality": { "field": "destination.ip" }
+          }
+        }
+      }
+    },
+    "post_filter": {
+      "range": {
+        "rejected_count": { "gte": 50 }
+      }
+    }
+  },
+
+  "10_low_and_slow_scan": {
+    "description": "Slow reconnaissance over extended time period",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } }
+        ],
+        "filter": [
+          { "range": { "@timestamp": { "gte": "now-10m" } } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 100 },
+        "aggs": {
+          "scan_activity": {
+            "value_count": { "field": "@timestamp" }
+          },
+          "time_distribution": {
+            "date_histogram": {
+              "field": "@timestamp",
+              "fixed_interval": "1m"
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "11_multi_technique_scan": {
+    "description": "Advanced: Combination of different scan techniques",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 100 },
+        "aggs": {
+          "techniques_used": {
+            "terms": { "field": "tcp.flags", "size": 10 }
+          },
+          "total_activity": {
+            "value_count": { "field": "@timestamp" }
+          }
+        }
+      }
+    }
+  },
+
+  "12_outbound_scan_detection": {
+    "description": "Outbound port scanning - data exfiltration risk",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "network.traffic_direction": "outbound" } }
+        ],
+        "must_not": [
+          { "terms": { "source.ip": ["127.0.0.1", "10.0.0.1"] } }
+        ],
+        "filter": [
+          { "range": { "@timestamp": { "gte": "now-5m" } } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 100 },
+        "aggs": {
+          "outbound_ports": {
+            "cardinality": { "field": "destination.port" }
+          },
+          "destination_ips": {
+            "cardinality": { "field": "destination.ip" }
+          },
+          "total_attempts": {
+            "value_count": { "field": "destination.port" }
+          }
+        }
+      }
+    }
+  },
+
+  "13_real_time_alert": {
+    "description": "Real-time alerting for immediate suspicious activity detection",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } },
+          { "match": { "network.protocol": "tcp" } },
+          { "match": { "tcp.flags": "SYN" } }
+        ],
+        "filter": [
+          { "range": { "@timestamp": { "gte": "now-1m" } } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source": {
+        "terms": { "field": "source.ip", "size": 100 },
+        "aggs": {
+          "unique_ports": {
+            "cardinality": { "field": "destination.port" }
+          },
+          "attempt_count": {
+            "value_count": { "field": "destination.port" }
+          }
+        }
+      }
+    }
+  },
+
+  "14_with_whitelist_exclusion": {
+    "description": "Production query with known legitimate sources excluded",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } },
+          { "match": { "network.protocol": "tcp" } },
+          { "match": { "tcp.flags": "SYN" } }
+        ],
+        "must_not": [
+          { "terms": { "source.ip": ["10.0.0.1", "10.0.0.100", "192.168.1.50"] } },
+          { "wildcard": { "source.ip": "10.50.*" } }
+        ]
+      }
+    },
+    "aggs": {
+      "by_source_ip": {
+        "terms": { "field": "source.ip", "size": 100 },
+        "aggs": {
+          "unique_ports": {
+            "cardinality": { "field": "destination.port" }
+          },
+          "total_attempts": {
+            "value_count": { "field": "destination.port" }
+          }
+        }
+      }
+    }
+  },
+
+  "15_temporal_analysis": {
+    "description": "Temporal analysis - when scanning occurs and patterns",
+    "query": {
+      "bool": {
+        "must": [
+          { "match": { "firewall.action": "BLOCK" } }
+        ]
+      }
+    },
+    "aggs": {
+      "scan_timeline": {
+        "date_histogram": {
+          "field": "@timestamp",
+          "fixed_interval": "5m"
+        },
+        "aggs": {
+          "unique_sources": {
+            "cardinality": { "field": "source.ip" }
+          },
+          "unique_targets": {
+            "cardinality": { "field": "destination.ip" }
+          },
+          "top_sources": {
+            "terms": { "field": "source.ip", "size": 5 }
+          }
+        }
+      }
+    }
+  },
+
+  "implementation_notes": {
+    "api_usage": [
+      "POST /firewall-logs/_search",
+      "POST /logs-firewall*/_search",
+      "POST /_search (searches all indices)"
+    ],
+    "python_example": "from elasticsearch import Elasticsearch; es = Elasticsearch(['localhost:9200']); response = es.search(index='firewall-logs', body=query)",
+    "curl_example": "curl -X POST 'localhost:9200/firewall-logs/_search' -H 'Content-Type: application/json' -d @query.json",
+    "field_mapping": {
+      "source_ip": "source.ip or src_ip",
+      "dest_ip": "destination.ip or dest_ip",
+      "dest_port": "destination.port or dest_port",
+      "tcp_flags": "tcp.flags or flags",
+      "action": "firewall.action or action",
+      "timestamp": "@timestamp or timestamp"
+    },
+    "performance_tuning": [
+      "Create index template with mappings for tcp.flags as keyword",
+      "Use doc_values: true for frequently filtered fields",
+      "Create rollover indices daily (logs-firewall-2024.02.23)",
+      "Use ingest pipelines for field extraction at ingest time",
+      "Implement ILM (Index Lifecycle Management) for retention"
+    ],
+    "threshold_tuning": [
+      "Test against baseline traffic first",
+      "Adjust unique_ports threshold based on environment",
+      "Consider time-of-day variations",
+      "Use percentile aggregations for outlier detection",
+      "Implement adaptive thresholds with ML"
+    ]
+  }
+}

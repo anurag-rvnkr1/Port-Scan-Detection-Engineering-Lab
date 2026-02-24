@@ -1,0 +1,248 @@
+{
+  "version": "1.2",
+  "globals": {
+    "doc": "Port Scan Detection Engineering Lab - Splunk Dashboard",
+    "locale": "en-US"
+  },
+  "dashboard": {
+    "label": "Port Scan Detection - Live Monitor",
+    "description": "Real-time monitoring and detection of reconnaissance port scanning activities",
+    "rows": [
+      {
+        "panels": [
+          {
+            "viz": "splunk.singlevalue",
+            "label": "Total Blocked Connections (Last 1h)",
+            "description": "Total number of blocked connection attempts in the last hour",
+            "options": {
+              "underLabel": "Connection Attempts"
+            },
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"[UFW BLOCK]\" earliest=-1h | stats count"
+            }
+          },
+          {
+            "viz": "splunk.singlevalue",
+            "label": "Unique Source IPs",
+            "description": "Number of unique source IPs generating port scan activity",
+            "options": {
+              "underLabel": "Scanning Sources"
+            },
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"[UFW BLOCK]\" earliest=-1h | stats dc(SRC)"
+            }
+          },
+          {
+            "viz": "splunk.singlevalue",
+            "label": "High Risk Alerts",
+            "description": "Number of detections meeting high-risk criteria (>20 ports)",
+            "options": {
+              "underLabel": "High Risk Events"
+            },
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"SYN\" earliest=-1h | stats dc(DPT) as unique_ports by SRC | where unique_ports > 20 | stats count"
+            }
+          },
+          {
+            "viz": "splunk.singlevalue",
+            "label": "Most Active Scanning IP",
+            "description": "Single source IP with highest activity",
+            "options": {
+              "underLabel": "Top Attacker IP"
+            },
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"[UFW BLOCK]\" earliest=-1h | stats count by SRC | sort - count | head 1 | fields SRC"
+            }
+          }
+        ]
+      },
+      {
+        "panels": [
+          {
+            "viz": "splunk.bar",
+            "label": "Top 10 Scanning Source IPs",
+            "description": "Source IPs with the most scanning activity",
+            "options": {
+              "xAxisLabel": "Number of Connection Attempts",
+              "yAxisLabel": "Source IP"
+            },
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"[UFW BLOCK]\" earliest=-1h | stats count as attempts, dc(DPT) as unique_ports by SRC | sort - attempts | head 10"
+            }
+          },
+          {
+            "viz": "splunk.pie",
+            "label": "Scan Technique Distribution",
+            "description": "Breakdown of scan types detected",
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog earliest=-1h | stats count by tcp_flags"
+            }
+          }
+        ]
+      },
+      {
+        "panels": [
+          {
+            "viz": "splunk.bar",
+            "label": "Top 15 Most Targeted Ports",
+            "description": "Destination ports that are most frequently scanned",
+            "options": {
+              "xAxisLabel": "Number of Attempts",
+              "yAxisLabel": "Destination Port"
+            },
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"[UFW BLOCK]\" earliest=-1h | stats count as scan_attempts by DPT | sort - scan_attempts | head 15"
+            }
+          },
+          {
+            "viz": "splunk.bar",
+            "label": "Scan Activity Timeline (by Hour)",
+            "description": "When scanning activity occurs throughout the day",
+            "options": {
+              "xAxisLabel": "Time",
+              "yAxisLabel": "Number of Attempts"
+            },
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"[UFW BLOCK]\" earliest=-24h | timechart count by _time span=1h"
+            }
+          }
+        ]
+      },
+      {
+        "panels": [
+          {
+            "viz": "splunk.table",
+            "label": "SYN Scan Alerts - High Risk",
+            "description": "All SYN scans where source hit > 20 unique ports",
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"SYN\" earliest=-1h | stats count as attempts, dc(DPT) as unique_ports, values(DPT) as port_list by SRC | where unique_ports > 20 | eval severity=\"HIGH\" | table SRC, unique_ports, attempts, severity | sort - unique_ports"
+            }
+          }
+        ]
+      },
+      {
+        "panels": [
+          {
+            "viz": "splunk.table",
+            "label": "Stealth Scan Alerts - FIN/NULL/XMAS",
+            "description": "Stealth reconnaissance techniques detected",
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog (\"FIN\" OR \"NONE\" OR \"FIN,PSH,URG\") earliest=-1h | stats count as packets, dc(DPT) as unique_ports by SRC, tcp_flags | eval severity=\"MEDIUM\" | table SRC, tcp_flags, unique_ports, packets, severity | sort - packets"
+            }
+          }
+        ]
+      },
+      {
+        "panels": [
+          {
+            "viz": "splunk.table",
+            "label": "Port Sweep Detection - Multiple Targets",
+            "description": "Single source scanning same port across multiple destination IPs",
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"[UFW BLOCK]\" earliest=-1h | stats count as attempts, dc(DST) as unique_targets by SRC, DPT | where unique_targets > 15 | eval severity=\"HIGH\" | table SRC, DPT, unique_targets, attempts, severity | sort - unique_targets"
+            }
+          }
+        ]
+      },
+      {
+        "panels": [
+          {
+            "viz": "splunk.table",
+            "label": "Detailed Firewall Events - Last 100",
+            "description": "Raw firewall logs for detailed investigation",
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"[UFW\" earliest=-1h | fields _time, SRC, DST, DPT, tcp_flags | head 100"
+            }
+          }
+        ]
+      },
+      {
+        "panels": [
+          {
+            "viz": "splunk.line",
+            "label": "SYN Scan Activity - Real-Time Trend",
+            "description": "Timeline of SYN scan attempts (last 4 hours)",
+            "options": {
+              "xAxisLabel": "Time",
+              "yAxisLabel": "Scan Count"
+            },
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog \"SYN\" earliest=-4h | timechart count by SRC, span=5m"
+            }
+          }
+        ]
+      },
+      {
+        "panels": [
+          {
+            "viz": "splunk.table",
+            "label": "Source IPs with Multi-Technique Scans",
+            "description": "Advanced attackers using multiple scan methods",
+            "query": {
+              "querystring": "index=firewall sourcetype=syslog earliest=-1h | stats values(tcp_flags) as techniques by SRC | search techniques=\"*SYN*\" techniques=\"*FIN*\" | table SRC, techniques"
+            }
+          }
+        ]
+      }
+    ],
+    "inputs": {
+      "input1": {
+        "type": "timerangepicker",
+        "options": {
+          "token": "time",
+          "default": "earliest=-24h latest=now"
+        }
+      }
+    }
+  },
+  "metadata": {
+    "author": "SOC Detection Engineer",
+    "updated": "2024-02-23",
+    "version": "1.0",
+    "notes": "Use this dashboard to monitor and investigate port scanning reconnaissance activity",
+    "setup_instructions": [
+      "1. Export this JSON and save as splunk_dashboard.json",
+      "2. In Splunk UI: Settings > Dashboards > Create New > Import",
+      "3. Upload the JSON file",
+      "4. Adjust index name to match your firewall logs index",
+      "5. Adjust source type if different from 'syslog'",
+      "6. Customize field names (SRC, DST, DPT, tcp_flags) to match your environment",
+      "7. Set up alerts on high-risk panels (SYN scan > 20 ports)",
+      "8. Configure alert actions: Email, Slack, webhook, PagerDuty"
+    ],
+    "field_mappings": {
+      "SRC": "source.ip or src_ip",
+      "DST": "destination.ip or dest_ip",
+      "DPT": "destination.port or dest_port",
+      "tcp_flags": "flags or tcp_flags",
+      "action": "firewall.action or [UFW BLOCK]"
+    },
+    "alert_rules": [
+      {
+        "name": "Critical SYN Scan Detected",
+        "condition": "unique_ports > 30",
+        "threshold": "High Risk",
+        "action": "Send alert to SOC team"
+      },
+      {
+        "name": "Stealth Scan Detected",
+        "condition": "FIN or NULL or XMAS packets",
+        "threshold": "Medium Risk",
+        "action": "Create incident and investigate"
+      },
+      {
+        "name": "Port Sweep Detected",
+        "condition": "unique_targets > 15 in 1 minute",
+        "threshold": "High Risk",
+        "action": "Block source IP, escalate to security team"
+      }
+    ],
+    "performance_tuning": [
+      "Use time picker to limit search scope",
+      "Index-time field extraction for tcp_flags",
+      "Pre-compute SYN scans with summary indexing",
+      "Use datamodels for acceleration",
+      "Implement lookup tables for IP reputation"
+    ]
+  }
+}
