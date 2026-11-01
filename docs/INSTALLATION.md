@@ -32,8 +32,11 @@ Open `http://localhost:3000` in the VM browser. To open it from the Windows host
 2. Confirm that the event count and alert count change. The events are synthetic and remain local.
 3. Choose **Security alerts**, select an alert, and inspect its detection reason and event evidence IDs.
 4. Choose **Network events** to inspect normalized records; use the search field and **Export CSV**.
-5. Choose **Log ingestion**, select `Zeek conn.log`, choose `port_scan_detection_lab/logs/zeek_conn.log`, and start ingestion. The parser shows accepted records, duplicates, and malformed lines.
-6. Repeat with the Suricata JSON Lines or UFW syslog sample by changing the source format.
+5. From an alert investigation drawer, assign an analyst, change the alert status, and create an incident.
+6. Choose **Incidents** to advance the new incident through Investigating, Escalated, Resolved, and Closed; the local audit trail records each update.
+7. Download the SOC summary CSV from the Incidents page or request the JSON summary report from the API.
+8. Choose **Log ingestion**, select `Zeek conn.log`, choose `port_scan_detection_lab/logs/zeek_conn.log`, and start ingestion. The parser shows accepted records, duplicates, and malformed lines.
+9. Repeat with the Suricata JSON Lines or UFW syslog sample by changing the source format.
 
 ## Run Tests and Troubleshoot
 
@@ -50,3 +53,4 @@ npm run build
 - API schema and request errors are available at <http://localhost:8000/docs>.
 
 No live network traffic is captured. Splunk and Elasticsearch setup is not currently connected to the application.
+This is a single-user local demonstration: analyst identity is a fixed local label, with no login, role-based access control, or external audit sink. Keep the API bound to loopback.

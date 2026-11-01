@@ -56,7 +56,7 @@ def test_malformed_records_are_reported_without_discarding_valid_events() -> Non
     assert errors[0]["line"] == 2
 
 
-@pytest.mark.parametrize("scenario,expected_rule", [("syn", "tcp_syn_scan"), ("syn", "horizontal_port_scan"), ("connect", "tcp_connect_scan"), ("fin", "tcp_fin_scan"), ("null", "tcp_null_scan"), ("xmas", "tcp_xmas_scan"), ("sweep", "vertical_port_sweep")])
+@pytest.mark.parametrize("scenario,expected_rule", [("syn", "tcp_syn_scan"), ("syn", "horizontal_port_scan"), ("connect", "tcp_connect_scan"), ("fin", "tcp_fin_scan"), ("null", "tcp_null_scan"), ("xmas", "tcp_xmas_scan"), ("sweep", "vertical_port_sweep"), ("low_slow", "low_and_slow_recon")])
 def test_scan_scenarios_produce_explainable_alerts(scenario: str, expected_rule: str) -> None:
     events = generate_events(count=30, scenario=scenario, seed=10)
 
@@ -81,11 +81,21 @@ def test_slow_multiport_activity_is_labeled_as_a_heuristic() -> None:
     assert any(alert.rule_id == "low_and_slow_recon" for alert in alerts)
 
 
+def test_synthetic_low_slow_dataset_is_labeled_and_spans_multiple_minutes() -> None:
+    events = generate_events(count=30, scenario="low_slow", seed=12)
+
+    assert {event.ground_truth for event in events} == {"malicious"}
+    assert events[-1].timestamp - events[0].timestamp >= timedelta(minutes=5)
+    assert any(alert.rule_id == "low_and_slow_recon" for alert in detect_scans(events))
+
+
 def test_benign_and_single_events_do_not_create_scan_alerts() -> None:
-    benign = generate_events(count=40, scenario="benign")
+    benign = generate_events(count=100, scenario="benign")
     single = generate_events(count=1, scenario="syn")
 
     assert detect_scans(benign) == []
+    assert any(event.protocol == "udp" and event.event_type == "dns" for event in benign)
+    assert all(event.tcp_flags is None for event in benign if event.protocol == "udp")
     assert detect_scans(single) == []
 
 
@@ -95,3 +105,52 @@ def test_generator_is_repeatable_for_the_same_seed() -> None:
 
     assert [event.event_id for event in first] == [event.event_id for event in second]
     assert [event.destination_port for event in first] == [event.destination_port for event in second]
+
+
+def test_synthetic_events_include_ground_truth_labels() -> None:
+    benign = generate_events(count=3, scenario="benign", seed=1)
+    malicious = generate_events(count=3, scenario="syn", seed=2)
+
+    assert {event.ground_truth for event in benign} == {"benign"}
+    assert {event.ground_truth for event in malicious} == {"malicious"}
+
+
+def test_suricata_hex_flags_are_normalized_for_scan_detection() -> None:
+    records = [
+        '{"timestamp":"2024-01-01T00:00:%02dZ","src_ip":"198.51.100.10","dest_ip":"192.0.2.10","src_port":40000,"dest_port":%d,"proto":"TCP","event_type":"flow","tcp":{"tcp_flags":"02"}}'
+        % (index, 20 + index)
+        for index in range(8)
+    ]
+
+    events, errors = parse_log("\n".join(records), "suricata")
+
+    assert not errors
+    assert all(event.tcp_flags == ["SYN"] for event in events)
+    assert all(event.event_type == "flow" for event in events)
+    assert any(alert.rule_id == "tcp_syn_scan" for alert in detect_scans(events))
+
+
+def test_unsupported_suricata_flag_encoding_is_reported() -> None:
+    content = '{"timestamp":"2024-01-01T00:00:00Z","src_ip":"192.0.2.1","dest_ip":"192.0.2.2","proto":"TCP","tcp":{"flags":"not-flags"}}'
+
+    events, errors = parse_log(content, "suricata")
+
+    assert not events
+    assert len(errors) == 1
+    assert "unsupported Suricata TCP flags" in errors[0]["message"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "[]",
+        '{"timestamp":"2024-01-01T00:00:00Z","src_ip":"192.0.2.1","dest_ip":"192.0.2.2","alert":[1]}',
+        '{"timestamp":"2024-01-01T00:00:00Z","src_ip":"192.0.2.1","dest_ip":"192.0.2.2","proto":"TCP","tcp":[1]}',
+        '{"timestamp":"2024-01-01T00:00:00Z","src_ip":"192.0.2.1","dest_ip":"192.0.2.2","proto":"TCP","tcp":{"flags":"100"}}',
+    ],
+)
+def test_malformed_suricata_objects_are_counted_not_raised(content: str) -> None:
+    events, errors = parse_log(content, "suricata")
+
+    assert not events
+    assert len(errors) == 1

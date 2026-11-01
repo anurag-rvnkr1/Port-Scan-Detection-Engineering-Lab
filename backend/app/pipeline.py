@@ -5,7 +5,6 @@ import json
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from ipaddress import ip_address
 from typing import Iterable
 
 from pydantic import ValidationError
@@ -37,10 +36,20 @@ def _event(record: dict, sensor: str, source_file: str, line_number: int, raw: s
     if isinstance(timestamp, (int, float)) or (isinstance(timestamp, str) and timestamp.replace(".", "", 1).isdigit()):
         timestamp = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
 
-    alert = record.get("alert") or {}
-    tcp = record.get("tcp") or {}
+    alert = record.get("alert")
+    if alert is None:
+        alert = {}
+    if not isinstance(alert, dict):
+        raise ValueError("alert metadata must be an object")
+    tcp = record.get("tcp")
+    if tcp is None:
+        tcp = {}
+    if not isinstance(tcp, dict):
+        raise ValueError("tcp metadata must be an object")
     proto = record.get("protocol", record.get("proto", "other"))
-    flags = tcp.get("flags") if "flags" in tcp else record.get("tcp_flags")
+    flags = tcp.get("flags", tcp.get("tcp_flags", record.get("tcp_flags")))
+    if sensor == "suricata":
+        flags = _suricata_flags(flags)
     normalized = {
         "timestamp": timestamp,
         "event_id": str(record.get("event_id") or record.get("uid") or _stable_event_id(source_file, line_number, raw)),
@@ -50,7 +59,7 @@ def _event(record: dict, sensor: str, source_file: str, line_number: int, raw: s
         "destination_port": destination_port,
         "protocol": proto,
         "tcp_flags": flags,
-        "event_type": record.get("event_type", "connection"),
+        "event_type": record.get("event_type", record.get("type", "connection")),
         "connection_state": record.get("connection_state", record.get("conn_state", tcp.get("state"))),
         "sensor_type": sensor,
         "source_file": source_file,
@@ -60,6 +69,28 @@ def _event(record: dict, sensor: str, source_file: str, line_number: int, raw: s
         "severity": str(alert.get("severity")) if alert.get("severity") is not None else None,
     }
     return NetworkEvent.model_validate(normalized)
+
+
+def _suricata_flags(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    flags = value.strip().upper()
+    if flags in {"", "-", "NONE"}:
+        return []
+    names = {1: "FIN", 2: "SYN", 4: "RST", 8: "PSH", 16: "ACK", 32: "URG", 64: "ECE", 128: "CWR"}
+    tokens = {token for token in re.split(r"[\s,|]+", flags) if token}
+    if tokens and tokens <= set(names.values()):
+        return sorted(tokens)
+    try:
+        mask = int(flags, 16)
+    except ValueError:
+        letters = {"F": "FIN", "S": "SYN", "R": "RST", "P": "PSH", "A": "ACK", "U": "URG", "E": "ECE", "C": "CWR"}
+        if not set(flags) <= set(letters):
+            raise ValueError(f"unsupported Suricata TCP flags: {value}")
+        return sorted({letters[letter] for letter in flags})
+    if mask < 0 or mask & ~0xFF:
+        raise ValueError(f"unsupported Suricata TCP flag mask: {value}")
+    return sorted(name for bit, name in names.items() if mask & bit)
 
 
 def parse_log(content: str, format_name: str, source_file: str = "upload") -> tuple[list[NetworkEvent], list[dict]]:
@@ -75,6 +106,8 @@ def parse_log(content: str, format_name: str, source_file: str = "upload") -> tu
         try:
             if format_name == "suricata":
                 record = json.loads(line)
+                if not isinstance(record, dict):
+                    raise ValueError("JSON log record must be an object")
                 sensor = "suricata"
             elif format_name == "zeek":
                 if line.startswith("#fields"):

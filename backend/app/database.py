@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import JSON, DateTime, Float, Integer, String, create_engine
+from sqlalchemy import JSON, DateTime, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -24,7 +25,7 @@ class EventRow(Base):
     __tablename__ = "network_events"
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    timestamp: Mapped[object] = mapped_column(DateTime(timezone=True), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     source_ip: Mapped[str] = mapped_column(String(45), index=True)
     destination_ip: Mapped[str] = mapped_column(String(45), index=True)
     destination_port: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
@@ -39,9 +40,35 @@ class AlertRow(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     severity: Mapped[str] = mapped_column(String(20), index=True)
     status: Mapped[str] = mapped_column(String(24), default="New", index=True)
-    timestamp: Mapped[object] = mapped_column(DateTime(timezone=True), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     source_ip: Mapped[str] = mapped_column(String(45), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
+
+
+class IncidentRow(Base):
+    __tablename__ = "incidents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(String(4000), default="")
+    status: Mapped[str] = mapped_column(String(24), default="New", index=True)
+    assigned_to: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    alert_ids: Mapped[list[str]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    resolution: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+
+
+class AuditLogRow(Base):
+    __tablename__ = "audit_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(24), index=True)
+    entity_id: Mapped[str] = mapped_column(String(64), index=True)
+    action: Mapped[str] = mapped_column(String(80))
+    actor: Mapped[str] = mapped_column(String(120))
+    details: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 def create_tables() -> None:

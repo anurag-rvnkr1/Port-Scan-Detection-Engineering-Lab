@@ -4,15 +4,17 @@ An offline-first network telemetry normalization and port-scan detection lab. Th
 
 ## What Works Today
 
-- Generate labeled synthetic TCP scan or benign-connection events without sending network traffic.
+- Generate labeled synthetic TCP scan, low-and-slow, or benign-connection events without sending network traffic.
 - Normalize IPv4/IPv6 events into a versioned schema and retain their raw input.
 - Ingest offline Zeek `conn.log`, Suricata EVE JSON Lines, and supported UFW syslog records. Bad lines are reported without discarding valid neighboring records.
 - Store events and explainable alerts in local SQLite; repeated ingestion of the same source file is deduplicated.
+- Correlate same-source events across upload batches using a bounded one-hour lookback and merge overlapping alert evidence while retaining analyst status.
 - Detect multi-event horizontal port scans, vertical port sweeps, successful TCP connect patterns, low-and-slow multi-port activity, SYN patterns when TCP flags exist, and FIN/NULL/XMAS patterns when the source reports flags.
 - View actual stored metrics, events, and alerts in the dashboard; inspect alert evidence and export visible rows to CSV.
+- Investigate alerts with persisted event evidence, update alert status/assignment, create incidents, record incident status changes, and export a database-backed SOC summary report.
 - Explore the local REST API through OpenAPI at `/docs`.
 
-Synthetic events are visibly labeled and never sent to the network. The application does not capture live traffic. Optional SIEM delivery, Nmap execution, incidents, report PDFs, authentication, and production deployment are not implemented.
+Synthetic events are visibly labeled and never sent to the network. The application does not capture live traffic. Optional SIEM delivery, Nmap execution, report PDFs, authentication, and production deployment are not implemented.
 
 ## Architecture
 
@@ -57,7 +59,8 @@ npm run dev
 
 Open <http://localhost:3000>. Use **Generate demo events** to create explicitly simulated events. The dashboard refreshes every 15 seconds. Use **Log ingestion** to load an offline file. The API health check is at <http://localhost:8000/health>; interactive API docs are at <http://localhost:8000/docs>.
 
-The API binds to loopback by default. Change `LAB_HOST`, `LAB_PORT`, `LAB_DATABASE_URL`, and `LAB_CORS_ORIGINS` only for a deliberate local deployment. Do not bind to a public interface without adding authentication and deployment hardening.
+The API binds to loopback by default. Change `LAB_HOST`, `LAB_PORT`, `LAB_DATABASE_URL`, and `LAB_CORS_ORIGINS` only for a deliberate local deployment. The local demo API has no authentication; do not bind it to a shared or public interface.
+The development server uses its own `.next-dev` output so a production build does not overwrite its active cache.
 
 ## Run Tests
 
@@ -71,7 +74,7 @@ The Python tests cover schema validation, supported sample parsing, malformed li
 
 ## Detection Behavior
 
-The current default threshold is eight distinct TCP destination ports for horizontal scanning, successful connect scanning, or a vertical sweep across eight destinations on one TCP port. SYN detection requires at least that many distinct ports with SYN present and ACK absent. FIN, NULL, and XMAS indicators require at least three matching events across three ports. The low-and-slow heuristic requires eight distinct ports from one source to one destination over at least five minutes. These are configurable in the Python detection function, not yet exposed as operator settings. A single event does not create an alert.
+The current default threshold is eight distinct TCP destination ports for horizontal scanning, successful connect scanning, or a vertical sweep across eight destinations on one TCP port. SYN detection requires at least that many distinct ports with SYN present and ACK absent. FIN, NULL, and XMAS indicators require at least three matching events across three ports. The low-and-slow heuristic requires eight distinct ports from one source to one destination over at least five minutes; the `low_slow` synthetic scenario exercises this behavior. These are configurable in the Python detection function, not yet exposed as operator settings. A single event does not create an alert.
 
 Severity and confidence are simple deterministic heuristics based primarily on observed port count; they are not calibrated risk probabilities. FIN/NULL/XMAS classification is impossible when a sensor omits TCP flags. A Zeek connection summary is not a packet capture and must not be interpreted as proof of individual packet flags. The included UFW parser supports syslog lines containing `SRC`, `DST`, and optional port/protocol fields; it is not a general parser for all firewall products.
 
@@ -91,8 +94,11 @@ Example with the included fixture: select **Log ingestion**, choose **Zeek conn.
 - `GET /api/dashboard/summary`: counts persisted events and alerts.
 - `GET /api/events?limit=100&offset=0`: paginated normalized events; optional `source_ip` and `protocol` filters.
 - `GET /api/alerts?limit=100&offset=0`: paginated persisted alerts.
-- `POST /api/demo/generate?scenario=syn&count=40`: generate local synthetic events (`syn`, `connect`, `sweep`, `fin`, `null`, `xmas`, or `benign`).
+- `POST /api/demo/generate?scenario=syn&count=40`: generate local synthetic events (`syn`, `connect`, `sweep`, `fin`, `null`, `xmas`, `low_slow`, or `benign`).
 - `POST /api/ingest/upload?format=zeek`: multipart upload; `format` may be `zeek`, `suricata`, or `firewall`.
+- `GET/PATCH /api/alerts/{alert_id}`: retrieve evidence and update alert status, severity, assignment, and notes.
+- `GET/POST /api/incidents` and `GET/PATCH /api/incidents/{incident_id}`: create incidents from alerts and track their status with audit history.
+- `GET /api/reports/summary` and `GET /api/reports/summary.csv`: generate persisted-record summary reports.
 
 ## Repository Map
 
@@ -108,8 +114,8 @@ Example with the included fixture: select **Log ingestion**, choose **Zeek conn.
 ## Current Limitations
 
 - No Splunk or Elasticsearch client is implemented; the existing query/dashboard files remain reference examples and are not verified against this API's schema.
-- No controlled Nmap runner, sensor process, live packet capture, low-and-slow/distributed detector, or dedicated TCP Connect detector.
-- No analyst authentication, alert assignment/status workflow, incident management, audit trail, PDF reports, or detection evaluation metrics.
+- No controlled Nmap runner, sensor process, live packet capture, distributed or multi-technique correlation, allowlisting, or operator-facing detection tuning. The TCP Connect and low-and-slow heuristics are implemented but remain simple threshold-based rules.
+- No analyst authentication, role-based authorization, API rate limiting, PDF reports, or detection evaluation metrics. The alert/incident workflow and JSON/CSV summary report exist only for this single-user, loopback-bound demo.
 - No Docker deployment or CI workflow yet. PostgreSQL configuration is not validated.
 - Dashboard charts summarize the latest 500 records loaded by the UI. The API summary counts stored events, but filtering, sorting, and server-side time-window queries remain limited.
 - Synthetic fixture tests validate implemented behavior, not field performance on production traffic.

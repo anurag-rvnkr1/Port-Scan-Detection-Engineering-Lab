@@ -35,6 +35,7 @@ class NetworkEvent(BaseModel):
     scan_type: str | None = Field(default=None, max_length=40)
     direction: str | None = Field(default=None, max_length=40)
     tags: list[str] = Field(default_factory=list)
+    ground_truth: Literal["benign", "malicious"] | None = None
 
     @field_validator("timestamp")
     @classmethod
