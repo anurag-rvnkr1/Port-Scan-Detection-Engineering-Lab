@@ -931,7 +931,6 @@ def get_nmap_scan(
 @app.post("/api/scans", status_code=201)
 def create_nmap_scan(
     scan_request: NmapScanCreate,
-    request: Request,
     actor: Annotated[UserRow, Depends(require_admin)],
     session: Annotated[Session, Depends(get_db)],
 ) -> dict:
@@ -982,17 +981,17 @@ def create_nmap_scan(
         result=None,
         error=None,
     )
-    session.add(row)
-    _record_audit(
-        session,
-        "nmap_scan",
-        row.id,
-        "started",
-        actor.username,
-        {"target": row.target, "profile": row.profile, "scan_type": row.scan_type},
-    )
-    session.commit()
     try:
+        session.add(row)
+        _record_audit(
+            session,
+            "nmap_scan",
+            row.id,
+            "started",
+            actor.username,
+            {"target": row.target, "profile": row.profile, "scan_type": row.scan_type},
+        )
+        session.commit()
         try:
             row.result = execute_command(command, scan_request.timeout_seconds)
             row.status = "completed"

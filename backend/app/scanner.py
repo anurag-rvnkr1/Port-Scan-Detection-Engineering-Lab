@@ -87,7 +87,7 @@ def _parse_xml(xml_output: str) -> dict:
         raise NmapExecutionError("Nmap XML output exceeded the configured limit")
     try:
         root = ET.fromstring(xml_output)
-    except ET.ParseError as error:
+    except (ET.ParseError, RecursionError) as error:
         raise NmapExecutionError("Nmap returned invalid XML output") from error
     if root.tag != "nmaprun":
         raise NmapExecutionError("Nmap returned an unexpected XML document")
@@ -103,11 +103,15 @@ def _parse_xml(xml_output: str) -> dict:
             state = port.find("state")
             if state is None or state.attrib.get("state") != "open":
                 continue
+            try:
+                port_number = int(port.attrib["portid"])
+            except (KeyError, ValueError) as error:
+                raise NmapExecutionError("Nmap returned a port without a valid port number") from error
             service = port.find("service")
             ports.append(
                 {
                     "protocol": port.attrib.get("protocol"),
-                    "port": int(port.attrib["portid"]),
+                    "port": port_number,
                     "service": service.attrib.get("name") if service is not None else None,
                     "product": service.attrib.get("product") if service is not None else None,
                     "version": service.attrib.get("version") if service is not None else None,
@@ -168,6 +172,8 @@ def execute_command(arguments: list[str], timeout_seconds: int) -> dict:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as error:
@@ -177,24 +183,3 @@ def execute_command(arguments: list[str], timeout_seconds: int) -> dict:
     if completed.returncode != 0:
         raise NmapExecutionError(f"Nmap exited with status {completed.returncode}")
     return _parse_xml(completed.stdout)
-
-
-def execute_scan(
-    *,
-    target: str,
-    profile: str,
-    scan_type: str,
-    ports: list[int] | None,
-    service_detection: bool,
-    timeout_seconds: int,
-    configuration: ScanConfiguration,
-) -> dict:
-    arguments = build_command(
-        target=target,
-        profile=profile,
-        scan_type=scan_type,
-        ports=ports,
-        service_detection=service_detection,
-        configuration=configuration,
-    )
-    return execute_command(arguments, timeout_seconds)

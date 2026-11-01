@@ -17,6 +17,7 @@ Follow [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md). Create the initial administ
 7. Open **Log ingestion**, choose the matching source format, select an offline Zeek, Suricata, supported UFW-style log, or PCAP/PCAPNG file, and run parsing. Uploads are limited to 5 MiB and 20,000 records/packets. PCAP support extracts metadata only from Ethernet or raw IPv4/IPv6 captures; it does not store/replay packet payloads or start live capture. Duplicate event IDs are skipped; malformed records are reported.
 8. Use **Analyst management** (administrator or manager) to create a SOC Analyst or Read-only Viewer account. Passwords must be at least 12 characters.
 9. Select **Weekly PDF** to download a database-backed report. The API also supports `daily`, `weekly`, `monthly`, and `all` periods; append `&download=false` to preview inline in a browser. Reports include persisted metrics, alert severity distribution, top source/destination addresses and ports, rule and incident distributions, and investigation notes when available.
+10. Administrators may use the interactive API docs at `/docs` for the restricted Nmap API. Scanning is disabled unless Nmap is installed and `LAB_NMAP_ALLOWED_CIDRS` names an authorized private/loopback lab network. Requests target one IP, require explicit confirmation, are synchronous and rate-limited, and create audited scan history. No dashboard scan page or cancellation control is available.
 
 ## Detection Configuration
 
@@ -26,4 +27,4 @@ Set `LAB_DETECTION_THRESHOLD` and/or `LAB_DETECTION_SOURCE_ALLOWLIST` before sta
 
 The application stores data in `data/soc_lab.db` by default. There is no automatic retention policy. The UI refreshes persisted API data periodically; it is not a live sensor stream. Confidence and severity are heuristic. Results from synthetic samples are not a measure of real-world detection accuracy. PDF reports describe these limitations and are not an independent accuracy assessment.
 
-Nmap execution, live capture, PCAP investigation, Splunk/Elasticsearch delivery, and production deployment are unavailable; do not rely on controls or buttons for those features.
+Nmap execution is available only through the restricted API and has not been live-scan verified. Live capture and sensor processes are unavailable. PCAP upload parses metadata only; Splunk/Elasticsearch delivery is implemented but externally unverified. Production deployment is not supported.

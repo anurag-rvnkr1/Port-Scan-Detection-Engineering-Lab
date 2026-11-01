@@ -100,6 +100,7 @@ def test_initial_migration_creates_current_sqlite_schema(tmp_path: Path) -> None
             "auth_sessions",
             "incidents",
             "integration_deliveries",
+            "nmap_scans",
             "network_events",
             "security_alerts",
             "users",

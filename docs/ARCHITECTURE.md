@@ -57,4 +57,4 @@ Implemented rules and limitations are tracked in [FEATURE_STATUS.md](./FEATURE_S
 
 ## Target Architecture Not Yet Present
 
-Redis/Celery, WebSockets/SSE, live sensors, authorized Nmap jobs, SIEM search/health workflows, and production TLS, backup, monitoring, and scaling controls are future work. Offline PCAP parsing, PostgreSQL/Alembic, local Docker Compose, SIEM delivery, and CI configuration exist, but only the scoped checks described in [FEATURE_STATUS.md](./FEATURE_STATUS.md) are verified.
+Redis/Celery, WebSockets/SSE, live sensors, durable/cancellable Nmap jobs, SIEM search/health workflows, and production TLS, backup, monitoring, and scaling controls are future work. A synchronous Nmap API is restricted to explicit private/loopback CIDRs. Offline PCAP parsing, PostgreSQL/Alembic, local Docker Compose, SIEM delivery, and CI configuration exist, but only the scoped checks described in [FEATURE_STATUS.md](./FEATURE_STATUS.md) are verified.

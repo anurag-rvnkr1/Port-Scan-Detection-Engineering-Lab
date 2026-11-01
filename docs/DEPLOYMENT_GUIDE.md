@@ -44,6 +44,10 @@ LAB_DETECTION_SOURCE_ALLOWLIST="198.51.100.27,2001:db8:1234::/48" \
 
 `LAB_DETECTION_SOURCE_ALLOWLIST` suppresses alert generation for matching *source events*; it does not permit active network scanning. Invalid settings cause startup failure.
 
+### Authorized Nmap use
+
+Nmap is included in the backend container. In a local Python setup, install Nmap using your operating system's package manager and verify `nmap --version`. To enable scans, set `LAB_NMAP_ALLOWED_CIDRS` to a private or loopback CIDR for an isolated lab that you are authorized to test; it is empty by default. Example `.env` entry: `LAB_NMAP_ALLOWED_CIDRS=192.168.56.0/24`. Do not add public or third-party ranges. Restart the API after changing this setting. Admins can check `GET /api/nmap/status`, submit a scan through `POST /api/scans`, and review `GET /api/scans` and `/api/scans/{scan_id}`. Requests require explicit confirmation and are bounded by a fixed one-target scope, 256 ports, a 5–300 second timeout, a one-scan process lock, and three scans per admin per hour. This route executes synchronously and cannot be cancelled; a durable worker and cancellation remain pending. SYN scans may require privileges unavailable to the non-root container.
+
 An initial Alembic migration is available. To prepare a database before starting the API, run:
 
 ```bash

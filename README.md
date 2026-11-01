@@ -19,7 +19,7 @@ An offline-first network telemetry normalization and port-scan detection lab. Th
 - Optionally deliver normalized events and detections to Splunk HEC and Elasticsearch using environment-configured clients; delivery status is persisted without exposing credentials.
 - Explore the local REST API through OpenAPI at `/docs`.
 
-Synthetic events are visibly labeled and never sent to the network. The application does not capture live traffic. Optional SIEM delivery, Nmap execution, live sensors, and production deployment are not implemented.
+Synthetic events are visibly labeled and never sent to the network. The application does not capture live traffic. Restricted, synchronous Nmap execution and optional SIEM delivery are implemented but only locally/mocked verified; live sensors and production deployment are not implemented.
 
 ## Architecture
 
@@ -73,6 +73,12 @@ Open <http://localhost:3000>. Use **Generate demo events** to create explicitly 
 
 The API binds to loopback by default and requires an administrator-created account. Keep it loopback-bound unless deployed behind a reviewed HTTPS reverse proxy with `LAB_COOKIE_SECURE=true` and explicit CORS origins.
 The development server uses its own `.next-dev` output so a production build does not overwrite its active cache.
+
+### Authorized Nmap scans
+
+The scanner is disabled unless Nmap is installed and `LAB_NMAP_ALLOWED_CIDRS` explicitly lists private or loopback lab networks that you are authorized to test. Docker includes the Nmap binary, but the example environment leaves its target allowlist empty. For a local lab, add only that lab's private CIDR to `.env`, for example `LAB_NMAP_ALLOWED_CIDRS=192.168.56.0/24`, and restart the API. Scans accept one IP literal (not a hostname or arbitrary command-line options), require an authenticated administrator and explicit authorization confirmation, and are limited to one concurrent request, three per administrator per hour, at most 256 selected ports, and a 5–300 second timeout.
+
+Use the admin-only `/api/nmap/status` and `/api/scans` routes in the interactive API documentation to check availability, submit an authorized scan, and review persisted results. The service uses fixed Nmap argument arrays and parses XML output; it never invokes a shell. SYN scans may require operating-system privileges unavailable to the non-root Docker API. The current execution path is synchronous: durable background jobs, cancellation, and a dashboard scan-management page are not implemented. Automated tests use mocked Nmap output; no live scan was run as part of validation.
 
 ### Local Docker Compose
 
@@ -144,12 +150,14 @@ Example with the included fixture: select **Log ingestion**, choose **Zeek conn.
 - `GET /api/integrations`: admin-only integration configuration and recent delivery health; tokens are never returned.
 - `POST /api/integrations/splunk/test` and `/api/integrations/elasticsearch/test`: admin-only controlled test-event delivery.
 - `POST /api/integrations/deliveries/{delivery_id}/retry`: admin-only retry for a persisted failed event/alert batch.
+- `GET /api/nmap/status`: admin-only scanner readiness and opt-in target configuration status.
+- `POST /api/scans`, `GET /api/scans`, and `GET /api/scans/{scan_id}`: administrator-triggered, allowlisted Nmap scans and persisted history. See [Authorized Nmap scans](#authorized-nmap-scans) for strict scope and limits.
 
 Database migrations are managed with Alembic. Apply the initial migration with `.venv/bin/alembic upgrade head`; local SQLite also retains its automatic table initialization. The initial migration was tested on SQLite and PostgreSQL 17, and API database health was verified against the temporary PostgreSQL instance; production deployment is still pending.
 
 ## Status and limitations
 
-This is an offline-first detection engineering prototype, not a production SOC platform. Features verified in this checkout and the still-pending production work are tracked in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md). PostgreSQL migrations and a loopback-only Docker demo stack are locally verified; remote CI execution and production deployment are pending. Nmap, live packet capture, and SIEM delivery are not implemented. One browser-driven analyst workflow passes, but not all pages or roles have E2E coverage. Keep the API private; the Compose stack publishes only the frontend on loopback. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) and [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md).
+This is an offline-first detection engineering prototype, not a production SOC platform. Features verified in this checkout and the still-pending production work are tracked in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md). PostgreSQL migrations and a loopback-only Docker demo stack are locally verified; remote CI execution and production deployment are pending. Nmap is restricted and synchronous; live packet capture and sensors are not implemented, and SIEM delivery is mock-verified only. One browser-driven analyst workflow passes, but not all pages or roles have E2E coverage. Keep the API private; the Compose stack publishes only the frontend on loopback. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) and [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md).
 
 ## Repository Map
 
@@ -167,7 +175,7 @@ This is an offline-first detection engineering prototype, not a production SOC p
 ## Current Limitations
 
 - Splunk HEC and Elasticsearch delivery clients use bounded retries, TLS verification, batch limits, duplicate suppression, persisted outcomes, and secret-safe status. Contract tests mock both APIs; live ingestion/search has not been verified. There is no settings UI, delivery worker, automatic failed-delivery retry, or remote search workflow yet.
-- No controlled Nmap runner, sensor process, live packet capture, distributed or multi-technique correlation, or operator-facing detection UI. Source-IP/CIDR exclusions and threshold are startup environment settings only. The TCP Connect and low-and-slow heuristics remain simple threshold-based rules.
+- Nmap execution is allowlist-restricted but synchronous, with no background queue, cancellation, or scan-management UI. No sensor process, live packet capture, distributed or multi-technique correlation, or operator-facing detection-rule UI exists. Source-IP/CIDR exclusions and threshold are startup environment settings only. The TCP Connect and low-and-slow heuristics remain simple threshold-based rules.
 - Authentication, backend role checks, audit identity, bounded ingestion, PDF reports, optional SIEM delivery, and one Playwright workflow are covered by local checks; full teams, complete E2E coverage, remote CI execution, and production security validation remain pending.
 - PostgreSQL migrations are tested on SQLite and PostgreSQL 17; the local Docker Compose application stack is smoke-tested. Redis/background jobs, container scanning, and production deployment are pending.
 - Dashboard charts summarize the latest 500 records loaded by the UI. The API summary counts stored events, but filtering, sorting, and server-side time-window queries remain limited.
