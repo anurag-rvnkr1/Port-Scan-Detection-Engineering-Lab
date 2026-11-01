@@ -1,4 +1,4 @@
-# Port Scan Detection Engineering Lab
+# SentinelSOC — Port Scan Detection Engineering Lab
 
 An offline-first network telemetry normalization and port-scan detection lab. The checked-in sample logs and deterministic synthetic scenarios are processed locally by a FastAPI API and displayed in a Next.js SOC console. This repository is a developing portfolio project, not a production SOC platform; unsupported features are listed below.
 
@@ -62,6 +62,18 @@ Open <http://localhost:3000>. Use **Generate demo events** to create explicitly 
 The API binds to loopback by default. Change `LAB_HOST`, `LAB_PORT`, `LAB_DATABASE_URL`, and `LAB_CORS_ORIGINS` only for a deliberate local deployment. The local demo API has no authentication; do not bind it to a shared or public interface.
 The development server uses its own `.next-dev` output so a production build does not overwrite its active cache.
 
+### Detection tuning
+
+The local API supports process-start configuration for detection thresholds and source-IP/CIDR allowlisting. For example:
+
+```bash
+LAB_DETECTION_THRESHOLD=8 \
+LAB_DETECTION_SOURCE_ALLOWLIST="192.0.2.10,2001:db8:1234::/48" \
+./run_lab.sh
+```
+
+The threshold must be between 3 and 65536. Allowlisted source events are still ingested and shown in event history, but are excluded from scan alert generation. Invalid allowlist entries or thresholds stop API startup with an explicit configuration error. These environment variables do not provide authentication or authorize network access.
+
 ## Run Tests
 
 ```bash
@@ -74,7 +86,7 @@ The Python tests cover schema validation, supported sample parsing, malformed li
 
 ## Detection Behavior
 
-The current default threshold is eight distinct TCP destination ports for horizontal scanning, successful connect scanning, or a vertical sweep across eight destinations on one TCP port. SYN detection requires at least that many distinct ports with SYN present and ACK absent. FIN, NULL, and XMAS indicators require at least three matching events across three ports. The low-and-slow heuristic requires eight distinct ports from one source to one destination over at least five minutes; the `low_slow` synthetic scenario exercises this behavior. These are configurable in the Python detection function, not yet exposed as operator settings. A single event does not create an alert.
+The current default threshold is eight distinct TCP destination ports for horizontal scanning, successful connect scanning, or a vertical sweep across eight destinations on one TCP port. SYN detection requires at least that many distinct ports with SYN present and ACK absent. FIN, NULL, and XMAS indicators require at least three matching events across three ports. The low-and-slow heuristic requires the configured number of distinct ports from one source to one destination over at least five minutes; the `low_slow` synthetic scenario exercises this behavior. Threshold and source allowlist are configured at API startup using the environment variables above. A single event does not create an alert.
 
 Severity and confidence are simple deterministic heuristics based primarily on observed port count; they are not calibrated risk probabilities. FIN/NULL/XMAS classification is impossible when a sensor omits TCP flags. A Zeek connection summary is not a packet capture and must not be interpreted as proof of individual packet flags. The included UFW parser supports syslog lines containing `SRC`, `DST`, and optional port/protocol fields; it is not a general parser for all firewall products.
 
@@ -100,6 +112,10 @@ Example with the included fixture: select **Log ingestion**, choose **Zeek conn.
 - `GET/POST /api/incidents` and `GET/PATCH /api/incidents/{incident_id}`: create incidents from alerts and track their status with audit history.
 - `GET /api/reports/summary` and `GET /api/reports/summary.csv`: generate persisted-record summary reports.
 
+## Status and limitations
+
+This is an offline-first detection engineering prototype, not a production SOC platform. Features verified in this checkout and the still-pending production work are tracked in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md). The API has no authentication or RBAC; keep it loopback-bound. Nmap, live packet capture, SIEM delivery, PDF reports, Docker deployment, CI, and browser-driven end-to-end testing are not implemented or verified. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) and [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) before deployment.
+
 ## Repository Map
 
 - `backend/app/`: API, SQLite models, event schema, parsers, generator, and detections.
@@ -110,11 +126,13 @@ Example with the included fixture: select **Log ingestion**, choose **Zeek conn.
 - `docs/PROJECT_AUDIT.md`: verified initial repository audit.
 - `docs/IMPLEMENTATION_PLAN.md`: phases and verification gates.
 - `docs/INSTALLATION.md`: beginner setup, including Windows with an Ubuntu/Kali VM.
+- `docs/FEATURE_STATUS.md`, `docs/TESTING_REPORT.md`, and `docs/SECURITY_REVIEW.md`: verified capability, test, and security status.
+- `docs/ARCHITECTURE.md`, `docs/USER_GUIDE.md`, and `docs/DEPLOYMENT_GUIDE.md`: current local architecture and operator guidance.
 
 ## Current Limitations
 
 - No Splunk or Elasticsearch client is implemented; the existing query/dashboard files remain reference examples and are not verified against this API's schema.
-- No controlled Nmap runner, sensor process, live packet capture, distributed or multi-technique correlation, allowlisting, or operator-facing detection tuning. The TCP Connect and low-and-slow heuristics are implemented but remain simple threshold-based rules.
+- No controlled Nmap runner, sensor process, live packet capture, distributed or multi-technique correlation, or operator-facing detection UI. Source-IP/CIDR exclusions and threshold are startup environment settings only. The TCP Connect and low-and-slow heuristics remain simple threshold-based rules.
 - No analyst authentication, role-based authorization, API rate limiting, PDF reports, or detection evaluation metrics. The alert/incident workflow and JSON/CSV summary report exist only for this single-user, loopback-bound demo.
 - No Docker deployment or CI workflow yet. PostgreSQL configuration is not validated.
 - Dashboard charts summarize the latest 500 records loaded by the UI. The API summary counts stored events, but filtering, sorting, and server-side time-window queries remain limited.

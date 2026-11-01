@@ -52,5 +52,15 @@ npm run build
 - Local SQLite data is stored in `data/soc_lab.db`. Deleting that file removes local events and alerts; stop the API before doing so.
 - API schema and request errors are available at <http://localhost:8000/docs>.
 
+Set optional detection configuration before starting the API:
+
+```bash
+LAB_DETECTION_THRESHOLD=8 \
+LAB_DETECTION_SOURCE_ALLOWLIST="198.51.100.27,2001:db8:1234::/48" \
+./run_lab.sh
+```
+
+Allowlisted source events are still persisted; they are excluded only from scan detections. This setting does not configure or authorize network scanning.
+
 No live network traffic is captured. Splunk and Elasticsearch setup is not currently connected to the application.
 This is a single-user local demonstration: analyst identity is a fixed local label, with no login, role-based access control, or external audit sink. Keep the API bound to loopback.

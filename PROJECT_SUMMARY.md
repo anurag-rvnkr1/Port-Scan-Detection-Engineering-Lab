@@ -1,25 +1,26 @@
-# Project Status Summary
+# SentinelSOC Project Status Summary
 
-## Current Status: Functional Local Detection Prototype
+## Current Status: Offline Detection Engineering Prototype
 
-This repository now has a tested offline backend pipeline and an API-backed SOC dashboard. It is not production-ready and does not implement all originally proposed capabilities. Do not represent optional SIEM integrations, live traffic capture, Nmap execution, incident management, PDF reporting, authentication, or CI/CD as completed.
+The repository contains a functioning local FastAPI + SQLite backend and Next.js dashboard for synthetic and offline network telemetry. It is not production-ready and must not be presented as a fully deployed SOC platform.
 
-## Implemented and Locally Verified
+## Implemented and Verified
 
-- FastAPI API with a database health check and local SQLite persistence.
-- Pydantic canonical event schema with IPv4/IPv6 validation, UTC timestamp normalization, protocol/flag normalization, and raw-event preservation.
-- Deterministic synthetic scenarios: SYN, Connect-like, sweep, FIN, NULL, XMAS, and benign TCP records.
-- Parsers for included Zeek TSV, Suricata EVE JSON Lines, and UFW-style firewall sample logs.
-- Evidence-backed horizontal, vertical, TCP connect, low-and-slow, SYN, FIN, NULL, and XMAS detections.
-- API-backed dashboard views for metrics, events, alerts, offline ingestion, generation, and CSV export.
-- Regression tests for schema, samples, malformed records, negative cases, persistence, and deduplication.
-- Root-relative non-root installer and loopback-bound local API runner.
+- Canonical Pydantic event schema, UTC normalization, IPv4/IPv6 support, protocol and TCP flag normalization.
+- Deterministic labeled synthetic scenarios that do not send network traffic.
+- Zeek TSV, Suricata EVE JSONL, and supported UFW-style log ingestion.
+- SQLite persistence and event deduplication.
+- Explainable heuristic horizontal/vertical, connect, low-and-slow, SYN, FIN, NULL, and XMAS detections.
+- Process-start configurable detection threshold and IPv4/IPv6 source address/CIDR exclusions. Excluded events remain ingested.
+- API-backed dashboard, alert evidence and workflow, incident statuses/audit entries, and JSON/CSV summary reporting.
+- Backend suite: 44 tests passed on 2026-11-01. ESLint, TypeScript checking, and Next.js production build passed in the same implementation pass.
 
-Verification evidence at implementation time: `21 passed` in the focused pytest suite; `npm run lint` succeeds; `npm run build` succeeds with TypeScript checks enabled; shell syntax checks pass. Production npm audit reports zero vulnerabilities after the frontend dependency upgrades. See the current implementation plan for remaining gates.
+## Not Implemented or Verified
 
-## Not Yet Implemented or Verified
+- Authentication, RBAC, analyst identity, and trustworthy multi-user audit attribution.
+- Controlled Nmap scanning, live packet capture, Zeek/Suricata sensor processes, and PCAP analysis.
+- Splunk HEC and Elasticsearch delivery/search integrations.
+- PDF reports, PostgreSQL, Alembic migrations, Redis/background workers, and real-time push.
+- Docker deployment, GitHub Actions CI, Playwright workflows, load/performance testing, and independent detection-quality evaluation.
 
-- Splunk HEC and Elasticsearch delivery/search verification.
-- Restricted Nmap execution or live network sensor collection.
-- Incident/analyst workflow, API authentication, audit log, PDF reporting, low-and-slow detection, and automated detection-quality metrics.
-- Docker Compose, GitHub Actions, production benchmark, and live service integration.
+The unauthenticated API must remain loopback-bound. Synthetic fixture behavior is not a real-world precision/recall claim. See [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md), [docs/TESTING_REPORT.md](docs/TESTING_REPORT.md), and [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) for precise status and limitations.

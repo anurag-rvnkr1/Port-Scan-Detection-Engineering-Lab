@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 from collections import defaultdict
@@ -13,11 +14,25 @@ from backend.app.schemas import NetworkEvent, SecurityAlert
 
 
 DEFAULT_THRESHOLD = 8
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 RECOMMENDED_ACTIONS = [
     "Confirm whether the source is authorized for network discovery.",
     "Review the source and destination timeline alongside firewall and endpoint telemetry.",
     "Validate targeted services with the system owner before escalation.",
 ]
+
+
+def parse_source_allowlist(value: str | None) -> tuple[IPNetwork, ...]:
+    networks: list[IPNetwork] = []
+    for item in (value or "").split(","):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(candidate, strict=False))
+        except ValueError as error:
+            raise ValueError(f"invalid source allowlist entry: {candidate}") from error
+    return tuple(networks)
 
 
 def _stable_event_id(source_file: str, line_number: int, raw: str) -> str:
@@ -163,11 +178,20 @@ def _parse_firewall_line(line: str) -> dict:
     }
 
 
-def detect_scans(events: Iterable[NetworkEvent], threshold: int = DEFAULT_THRESHOLD) -> list[SecurityAlert]:
+def detect_scans(
+    events: Iterable[NetworkEvent],
+    threshold: int = DEFAULT_THRESHOLD,
+    allowlisted_sources: Iterable[IPNetwork] = (),
+) -> list[SecurityAlert]:
     if threshold < 3:
         raise ValueError("threshold must be at least 3 events")
 
-    events = list(events)
+    allowlisted_sources = tuple(allowlisted_sources)
+    events = [
+        event
+        for event in events
+        if not any(event.source_ip in network for network in allowlisted_sources)
+    ]
     groups: dict[tuple[str, str], list[NetworkEvent]] = defaultdict(list)
     for event in events:
         if event.protocol == "tcp" and event.destination_port is not None:

@@ -1,3 +1,4 @@
+import ipaddress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -5,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from backend.app.generator import generate_events
-from backend.app.pipeline import detect_scans, parse_log
+from backend.app.pipeline import detect_scans, parse_log, parse_source_allowlist
 from backend.app.schemas import NetworkEvent
 
 
@@ -97,6 +98,36 @@ def test_benign_and_single_events_do_not_create_scan_alerts() -> None:
     assert any(event.protocol == "udp" and event.event_type == "dns" for event in benign)
     assert all(event.tcp_flags is None for event in benign if event.protocol == "udp")
     assert detect_scans(single) == []
+
+
+def test_detection_threshold_and_source_cidr_allowlist() -> None:
+    events = generate_events(count=8, scenario="syn", seed=14)
+    events = [
+        NetworkEvent.model_validate({**event.model_dump(), "source_ip": "203.0.113.10"})
+        if index < 4
+        else event
+        for index, event in enumerate(events)
+    ]
+
+    assert detect_scans(events, threshold=8) == []
+    alerts = detect_scans(
+        events,
+        threshold=4,
+        allowlisted_sources=parse_source_allowlist("198.51.100.0/24"),
+    )
+
+    assert alerts
+    assert {alert.source_ip for alert in alerts} == {"203.0.113.10"}
+
+
+def test_source_allowlist_accepts_ipv4_and_ipv6_and_rejects_invalid_entries() -> None:
+    networks = parse_source_allowlist("192.0.2.1, 2001:db8::/32")
+
+    assert ipaddress.ip_address("192.0.2.1") in networks[0]
+    assert ipaddress.ip_address("2001:db8::1") in networks[1]
+    assert parse_source_allowlist(None) == ()
+    with pytest.raises(ValueError, match="invalid source allowlist entry"):
+        parse_source_allowlist("192.0.2.0/24,not-an-ip")
 
 
 def test_generator_is_repeatable_for_the_same_seed() -> None:

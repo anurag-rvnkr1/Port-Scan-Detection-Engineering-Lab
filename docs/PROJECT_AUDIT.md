@@ -1,17 +1,25 @@
 # Project Audit
 
-## Audit Scope
+## Current Snapshot — 2026-11-01
 
-This audit describes the checked-out workspace as inspected on 2026-11-01. It covers tracked project files, the existing frontend entrypoint and package configuration, root scripts, sample telemetry, SIEM query/dashboard artifacts, and the repository status. Existing user changes to `tsconfig.json`, `next-env.d.ts`, and `package-lock.json` were observed and are not part of this audit's proposed changes. No Python implementation or automated test source exists in the checkout.
+The current checkout is a working offline-first prototype: a FastAPI API with SQLAlchemy/SQLite persistence, Pydantic event normalization, Zeek/Suricata/UFW sample parsing, synthetic labeled event generation, multi-event detections, alert/incident APIs, CSV/JSON reporting, and a Next.js dashboard. It is not the production SentinelSOC platform described in the requested target architecture.
 
-## Existing Architecture
+Verification from this implementation pass: backend tests pass (44 passed); frontend ESLint, TypeScript checking, and production build pass. See [TESTING_REPORT.md](./TESTING_REPORT.md) for commands and scope. The latest code change adds process-start source-IP/CIDR allowlisting and detection-threshold configuration; allowlisted telemetry remains persisted and viewable.
+
+The initial audit below is retained as historical context. Its statements that the repository had no backend or tests describe the pre-implementation checkout and are superseded by the implementation updates later in this document.
+
+## First-Pass Audit Scope (Historical)
+
+This first-pass audit describes the pre-implementation checkout as inspected on 2026-11-01. It covered the tracked project inventory, frontend entrypoint and package configuration, root scripts, sample telemetry, SIEM query/dashboard artifacts, and repository status. At that point, no Python implementation or automated test source existed. The current snapshot above and remediation notes below supersede those initial findings.
+
+## First-Pass Existing Architecture (Historical)
 
 - A Next.js 16 / React 19 / TypeScript frontend shell exists at the repository root, with Tailwind CSS and a collection of shadcn-style UI components.
 - The app has a root layout and global styles, but no `app/page.tsx`, API routes, frontend tests, or application workflows.
 - `port_scan_detection_lab/` contains markdown scenarios, sample auth/syslog/Zeek/Suricata logs, SPL/KQL/Elasticsearch DSL query artifacts, dashboard examples, and manual testing instructions.
 - Root-level `run_lab.sh`, `install.sh`, and `nmap_commands.sh` operate separately from the nested lab directory. There is no backend, event schema, database, generator, parser, detection runtime, SIEM client, or report implementation.
 
-## Existing Features
+## First-Pass Existing Features (Historical)
 
 - Reference Nmap command examples and scan scenario documentation.
 - Static sample telemetry for Zeek, Suricata, syslog, and authentication activity.
@@ -20,7 +28,7 @@ This audit describes the checked-out workspace as inspected on 2026-11-01. It co
 
 These are reference materials, not an end-to-end running detection platform. No real-time traffic capture or successful SIEM ingestion was verified.
 
-## Missing Features
+## First-Pass Missing Features (Historical)
 
 - No Python modules, FastAPI application, canonical event model, database, tests, Docker configuration, CI workflow, or reproducible dependency lock for Python.
 - No safe synthetic event generator, controlled Nmap execution path, ingestion/parser pipeline, alert persistence, incident workflow, reporting, or dashboard data API.
@@ -28,7 +36,7 @@ These are reference materials, not an end-to-end running detection platform. No 
 - No configured or verified Splunk/Elasticsearch client. The query files do not establish that their fields match normalized events or a real index mapping.
 - No documented authorization/authentication boundary for state-changing API operations (there is no API yet).
 
-## Verified Bugs and Root Causes
+## First-Pass Bugs and Root Causes (Historical)
 
 | Finding | Root cause | Evidence / impact |
 | --- | --- | --- |
@@ -43,7 +51,7 @@ These are reference materials, not an end-to-end running detection platform. No 
 
 No hardcoded live credential was found; the visible HEC value is an obvious placeholder, but must still be removed from execution defaults. There is no evidence of an implemented Nmap runner, so the existing command reference is not an application-mediated scanner. Actual exploitability findings cannot be established for functionality that does not exist.
 
-## Proposed Architecture
+## Initial Proposed Architecture (Historical)
 
 Retain the current root-level Next.js project and reference materials; add a small `backend/` FastAPI application as the owner of event normalization, local SQLite persistence, detections, and REST endpoints. Keep synthetic generation offline and deterministic by default. Keep SIEM integrations optional and disabled until configured. The frontend should consume backend APIs and make the simulated/demo nature of locally generated records explicit. Do not introduce live sensor capture, unrestricted scanning, or external services as prerequisites.
 
@@ -101,4 +109,4 @@ Verification on this audit run:
 - These synthetic results are narrow fixture checks, not calibrated detection quality or real-world performance. The source-separated synthetic scenarios avoid cross-label contamination; the 12 split-batch events were intentionally unlabeled and excluded from the confusion matrix.
 - Production npm audit reports zero production dependency vulnerabilities. Development tooling still reports moderate npm advisories; no forced breaking dependency upgrade was applied.
 
-Remaining gaps: no Splunk/Elasticsearch client, live sensor, safe Nmap runner, formal rule correlation/allowlisting/tuning, auth/RBAC, multi-user analyst identity, PDF reporting, benchmark harness, CI workflow, or Docker deployment. Detection thresholds and confidence remain simple heuristics. The API is a local single-user demo and must stay loopback-bound. No real-world detection accuracy or performance claim is supported.
+Remaining gaps at that audit: no Splunk/Elasticsearch client, live sensor, safe Nmap runner, authentication/RBAC, multi-user analyst identity, PDF reporting, benchmark harness, CI workflow, or Docker deployment. Detection confidence remains a simple heuristic. This implementation pass has since added an operator-configurable detection threshold and source allowlist; advanced detection windows, formal evaluation, and live integrations remain pending. The API is a local single-user demo and must stay loopback-bound. No real-world detection accuracy or performance claim is supported.

@@ -18,12 +18,33 @@ from sqlalchemy.orm import Session
 
 from backend.app.database import AlertRow, AuditLogRow, EventRow, IncidentRow, SessionLocal, create_tables
 from backend.app.generator import SCENARIOS, generate_events
-from backend.app.pipeline import detect_scans, parse_log
+from backend.app.pipeline import DEFAULT_THRESHOLD, IPNetwork, detect_scans, parse_log, parse_source_allowlist
 from backend.app.schemas import NetworkEvent
 
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 DETECTION_HISTORY_SECONDS = 60 * 60
+
+
+def _configured_detection_threshold() -> int:
+    try:
+        threshold = int(os.getenv("LAB_DETECTION_THRESHOLD", str(DEFAULT_THRESHOLD)))
+    except ValueError as error:
+        raise RuntimeError("LAB_DETECTION_THRESHOLD must be an integer from 3 to 65536") from error
+    if not 3 <= threshold <= 65536:
+        raise RuntimeError("LAB_DETECTION_THRESHOLD must be an integer from 3 to 65536")
+    return threshold
+
+
+def _configured_detection_source_allowlist() -> tuple[IPNetwork, ...]:
+    try:
+        return parse_source_allowlist(os.getenv("LAB_DETECTION_SOURCE_ALLOWLIST"))
+    except ValueError as error:
+        raise RuntimeError(f"Invalid LAB_DETECTION_SOURCE_ALLOWLIST: {error}") from error
+
+
+DETECTION_SOURCE_ALLOWLIST = _configured_detection_source_allowlist()
+DETECTION_THRESHOLD = _configured_detection_threshold()
 
 
 class AlertUpdate(BaseModel):
@@ -147,7 +168,11 @@ def _persist(session: Session, events: list[NetworkEvent]) -> tuple[int, list[di
         for row in context_rows
         if row.id not in added_ids
     ]
-    alerts = detect_scans([*existing_events, *fresh])
+    alerts = detect_scans(
+        [*existing_events, *fresh],
+        threshold=DETECTION_THRESHOLD,
+        allowlisted_sources=DETECTION_SOURCE_ALLOWLIST,
+    )
     alert_rows = session.scalars(select(AlertRow).where(AlertRow.source_ip.in_(source_ips))).all()
     existing_by_key: dict[tuple[str, str, str], list[AlertRow]] = {}
     for row in alert_rows:

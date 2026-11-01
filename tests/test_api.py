@@ -67,6 +67,49 @@ def test_demo_api_persists_events_alerts_and_real_metrics(monkeypatch) -> None:
         engine.dispose()
 
 
+def test_allowlisted_demo_events_are_persisted_without_creating_alerts(api_client: TestClient, monkeypatch) -> None:
+    from backend.app.pipeline import parse_source_allowlist
+
+    monkeypatch.setattr(main, "DETECTION_SOURCE_ALLOWLIST", parse_source_allowlist("198.51.100.0/24"))
+
+    generated = api_client.post("/api/demo/generate?scenario=syn&count=12")
+    summary = api_client.get("/api/dashboard/summary").json()
+
+    assert generated.status_code == 200
+    assert generated.json()["accepted"] == 12
+    assert generated.json()["alerts"] == []
+    assert summary["total_events"] == 12
+    assert summary["total_alerts"] == 0
+
+
+def test_configured_detection_threshold_is_applied_by_api(api_client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(main, "DETECTION_THRESHOLD", 13)
+
+    generated = api_client.post("/api/demo/generate?scenario=syn&count=12")
+
+    assert generated.status_code == 200
+    assert generated.json()["accepted"] == 12
+    assert generated.json()["alerts"] == []
+
+
+@pytest.mark.parametrize("configured", ["not-a-number", "2", "65537"])
+def test_detection_threshold_configuration_rejects_invalid_values(monkeypatch, configured: str) -> None:
+    monkeypatch.setenv("LAB_DETECTION_THRESHOLD", configured)
+
+    with pytest.raises(RuntimeError, match="LAB_DETECTION_THRESHOLD must be an integer"):
+        main._configured_detection_threshold()
+
+
+def test_detection_allowlist_configuration_is_validated(monkeypatch) -> None:
+    monkeypatch.setenv("LAB_DETECTION_SOURCE_ALLOWLIST", "192.0.2.1,2001:db8::/32")
+    networks = main._configured_detection_source_allowlist()
+    assert len(networks) == 2
+
+    monkeypatch.setenv("LAB_DETECTION_SOURCE_ALLOWLIST", "not-an-address")
+    with pytest.raises(RuntimeError, match="Invalid LAB_DETECTION_SOURCE_ALLOWLIST"):
+        main._configured_detection_source_allowlist()
+
+
 def test_upload_is_idempotent_for_same_file_and_filename(monkeypatch) -> None:
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(bind=engine)
