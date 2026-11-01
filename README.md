@@ -104,6 +104,8 @@ npm run lint
 npm run typecheck
 npm run build
 npm run test:e2e
+.venv/bin/pip-audit -r requirements.lock
+npm audit --omit=dev
 bash -n install.sh run_lab.sh nmap_commands.sh
 ```
 

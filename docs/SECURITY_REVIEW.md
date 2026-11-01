@@ -22,12 +22,13 @@ No evidence of shell-based command execution, a Nmap runner, PCAP parsing, or SI
 - Event schemas validate IP addresses and ports, and ingestion deduplicates IDs.
 - `LAB_DETECTION_SOURCE_ALLOWLIST` is for excluding detection noise. It is not an authorized-target allowlist and must not be used to authorize scanning.
 - In the local Compose stack, the API and PostgreSQL are on an internal network with no published host ports; the frontend alone is published on host loopback. The Next.js server-side proxy forwards same-origin API traffic, caps request bodies at 6 MiB, and uses no-store responses. This topology has a local smoke test; it is not a substitute for production TLS, proxy identity verification, and network-policy review.
+- Pinned Python dependencies were audited and vulnerable AnyIO, Starlette, and pytest versions were upgraded; the current lock reports no known Python dependency vulnerabilities. Production npm dependencies also report none. The complete npm tree retains 16 moderate advisories in development lint tooling (`minimatch`); the suggested forced remediation downgrades ESLint to a breaking major, so it was not applied. CI audits npm at a high/critical threshold and includes Trivy high/critical image scans, but the remote workflow has not yet run.
 
 ## Remaining Before Shared or Production Use
 
 1. Replace process-local rate limiting with a shared backend before adding workers/replicas.
 2. Verify secure-cookie behavior behind the chosen HTTPS reverse proxy and deploy frontend/API on a compatible same-site origin.
-3. Add dependency/container scanning and security-focused API tests in CI.
+3. Execute the dependency/container scans in remote CI and keep resolving development-tool advisories through compatible upstream releases.
 4. Review PostgreSQL, TLS, secret handling, migrations, audit retention, and backup controls before production deployment.
 
 This update is a code-level mitigation and test pass, not an external penetration test or production security certification. Continue to use the app as a local prototype.

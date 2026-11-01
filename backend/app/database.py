@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import JSON, DateTime, Integer, String, create_engine
+from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -98,6 +98,23 @@ class AuthSessionRow(Base):
     user_id: Mapped[str] = mapped_column(String(36), index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class IntegrationDeliveryRow(Base):
+    __tablename__ = "integration_deliveries"
+    __table_args__ = (UniqueConstraint("batch_key", name="uq_integration_delivery_batch_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    batch_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    integration: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    record_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    record_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 def create_tables() -> None:

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from collections import defaultdict, deque
 import ipaddress
 import io
+import logging
 import os
 import secrets
 import threading
@@ -36,8 +37,19 @@ from backend.app.auth import (
     verify_csrf,
     verify_password,
 )
-from backend.app.database import AlertRow, AuditLogRow, AuthSessionRow, EventRow, IncidentRow, SessionLocal, UserRow, create_tables
+from backend.app.database import (
+    AlertRow,
+    AuditLogRow,
+    AuthSessionRow,
+    EventRow,
+    IncidentRow,
+    IntegrationDeliveryRow,
+    SessionLocal,
+    UserRow,
+    create_tables,
+)
 from backend.app.generator import SCENARIOS, generate_events
+from backend.app.integrations import IntegrationName, deliver_records, integration_status, send_test_event
 from backend.app.pipeline import DEFAULT_THRESHOLD, IPNetwork, detect_scans, parse_log, parse_source_allowlist
 from backend.app.pcap import PcapFormatError, PcapRecordLimitError, parse_pcap
 from backend.app.reports import ReportPeriod, generate_soc_pdf
@@ -129,6 +141,7 @@ class SlidingWindowLimiter:
 
 
 request_limiter = SlidingWindowLimiter()
+LOGGER = logging.getLogger(__name__)
 
 
 def _configured_detection_threshold() -> int:
@@ -424,6 +437,20 @@ def _persist(session: Session, events: list[NetworkEvent]) -> tuple[int, list[di
             existing_by_key.setdefault(key, []).append(matching_row)
         returned_alerts.append(payload)
     session.commit()
+    for integration_name in ("splunk", "elasticsearch"):
+        deliver_records(
+            session,
+            integration_name,
+            "network_event",
+            [event.model_dump(mode="json") for event in fresh],
+        )
+        if returned_alerts:
+            deliver_records(
+                session,
+                integration_name,
+                "security_alert",
+                returned_alerts,
+            )
     return len(fresh), returned_alerts
 
 
@@ -838,6 +865,73 @@ def summary_report_csv(
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="soc-summary.csv"'},
     )
+
+
+@app.get("/api/integrations")
+def list_integrations(
+    _: Annotated[UserRow, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    deliveries = session.scalars(
+        select(IntegrationDeliveryRow)
+        .order_by(IntegrationDeliveryRow.updated_at.desc())
+        .limit(50)
+    ).all()
+    return {
+        "integrations": integration_status(),
+        "recent_deliveries": [
+            {
+                "delivery_id": item.id,
+                "integration": item.integration,
+                "record_type": item.record_type,
+                "record_count": len(item.record_ids),
+                "status": item.status,
+                "attempts": item.attempts,
+                "http_status": item.http_status,
+                "error": item.error,
+                "created_at": item.created_at.isoformat(),
+                "updated_at": item.updated_at.isoformat(),
+            }
+            for item in deliveries
+        ],
+    }
+
+
+@app.post("/api/integrations/{integration_name}/test")
+def test_integration(
+    integration_name: str,
+    request: Request,
+    actor: Annotated[UserRow, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    if integration_name not in {"splunk", "elasticsearch"}:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    if not request_limiter.allow("integration-test", actor.id, 5, 60 * 60):
+        raise HTTPException(status_code=429, detail="Integration test rate limit exceeded")
+    try:
+        delivery = send_test_event(session, integration_name)  # type: ignore[arg-type]
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    _record_audit(
+        session,
+        "integration",
+        delivery.id,
+        "test_delivery",
+        actor.username,
+        {
+            "integration": integration_name,
+            "status": delivery.status,
+            "http_status": delivery.http_status,
+        },
+    )
+    session.commit()
+    return {
+        "integration": integration_name,
+        "status": delivery.status,
+        "attempts": delivery.attempts,
+        "http_status": delivery.http_status,
+        "error": delivery.error,
+    }
 
 
 @app.get("/api/reports/summary.pdf")
