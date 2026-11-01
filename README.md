@@ -1,722 +1,116 @@
-# Port Scan Detection Engineering Lab with SIEM Integration
+# Port Scan Detection Engineering Lab
 
-## 🎯 Project Overview
+An offline-first network telemetry normalization and port-scan detection lab. The checked-in sample logs and deterministic synthetic scenarios are processed locally by a FastAPI API and displayed in a Next.js SOC console. This repository is a developing portfolio project, not a production SOC platform; unsupported features are listed below.
 
-A **production-ready cybersecurity detection engineering lab** demonstrating advanced port scan reconnaissance detection using Nmap attack simulation and real-time detection in Splunk and Elastic Stack (ELK).
+## What Works Today
 
-This lab provides:
-- **7 attack simulation techniques** using Nmap
-- **15+ production-ready detection queries** (Splunk SPL & Elasticsearch DSL)
-- **Comprehensive dashboards** for real-time monitoring
-- **15 test cases** with validation procedures
-- **Complete documentation** for SOC teams
+- Generate labeled synthetic TCP scan or benign-connection events without sending network traffic.
+- Normalize IPv4/IPv6 events into a versioned schema and retain their raw input.
+- Ingest offline Zeek `conn.log`, Suricata EVE JSON Lines, and supported UFW syslog records. Bad lines are reported without discarding valid neighboring records.
+- Store events and explainable alerts in local SQLite; repeated ingestion of the same source file is deduplicated.
+- Detect multi-event horizontal port scans, vertical port sweeps, SYN patterns when TCP flags exist, and FIN/NULL/XMAS flag patterns when the source reports flags.
+- View actual stored metrics, events, and alerts in the dashboard; inspect alert evidence and export visible rows to CSV.
+- Explore the local REST API through OpenAPI at `/docs`.
 
-**Use Case:** Train security teams, develop detection rules, validate SIEM configurations, or build your detection engineering portfolio.
+Synthetic events are visibly labeled and never sent to the network. The application does not capture live traffic. Optional SIEM delivery, Nmap execution, incidents, report PDFs, authentication, and production deployment are not implemented.
 
----
+## Architecture
 
-## 📋 Table of Contents
-
-1. [Quick Start](#quick-start)
-2. [Architecture](#architecture)
-3. [Project Structure](#project-structure)
-4. [Installation](#installation)
-5. [Attack Simulation](#attack-simulation)
-6. [Detection Rules](#detection-rules)
-7. [Dashboards](#dashboards)
-8. [Testing & Validation](#testing--validation)
-9. [Professional Development](#professional-development)
-10. [FAQ](#faq)
-
----
-
-## 🚀 Quick Start (5 minutes)
-
-### Prerequisites
-```bash
-# System Requirements
-- Linux (Kali Linux recommended) or macOS
-- 4GB RAM minimum, 20GB disk space
-- Nmap, Python 3.6+
-- Splunk or Elasticsearch 8.0+
-
-# Optional but Recommended
-- Filebeat or Logstash for log forwarding
-- Kibana for ELK visualization
+```mermaid
+flowchart LR
+  UI[Next.js SOC console] -->|HTTP / JSON| API[FastAPI]
+  API --> SCHEMA[Pydantic event schema]
+  LOGS[Offline Zeek / Suricata / UFW files] --> PARSE[Format parsers]
+  GEN[Deterministic synthetic generator] --> SCHEMA
+  PARSE --> SCHEMA
+  SCHEMA --> DETECT[Explainable scan rules]
+  DETECT --> DB[(SQLite events and alerts)]
+  SCHEMA --> DB
+  DB --> API
 ```
 
-### Installation
+## Requirements
+
+- Python 3.10 or newer.
+- Node.js 20 or newer and npm.
+- Linux, macOS, or an Ubuntu/Kali virtual machine. External SIEM accounts and root privileges are not required.
+
+## Quick Start
+
+From a terminal at the repository root:
 
 ```bash
-# 1. Clone or download the lab
-cd port_scan_detection_lab
-
-# 2. Install dependencies
-sudo bash install.sh
-
-# 3. Generate sample logs
-bash run_lab.sh
-
-# 4. Ingest logs into SIEM
-# See "Log Ingestion" section below
+./install.sh
 ```
 
-### First Detection (10 minutes)
-
-**Splunk:**
-```splunk
-index=firewall sourcetype=syslog "SYN" 
-| stats dc(DPT) as unique_ports by SRC 
-| where unique_ports > 20
-```
-
-**Elasticsearch:**
-```json
-GET firewall-logs/_search
-{
-  "query": {
-    "bool": {
-      "must": [{ "match": { "tcp.flags": "SYN" } }]
-    }
-  },
-  "aggs": {
-    "by_source": {
-      "terms": { "field": "source.ip" },
-      "aggs": {
-        "unique_ports": { "cardinality": { "field": "destination.port" } }
-      }
-    }
-  }
-}
-```
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  Attack Simulation Layer                     │
-│  (Nmap: SYN, FIN, NULL, XMAS, ACK, Aggressive, Version)     │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Log Generation                            │
-│  (Syslog, Auth.log, Firewall, Zeek, Suricata)              │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-        ┌────────────────┼────────────────┐
-        ▼                ▼                ▼
-   ┌────────────┐  ┌────────────┐  ┌──────────────┐
-   │   Splunk   │  │Elasticsearch│  │  Filebeat   │
-   └────┬───────┘  └──────┬──────┘  └──────────────┘
-        │                 │
-        ├─────────┬───────┤
-        ▼         ▼       ▼
-   [SPL Queries] [DSL] [KQL]
-        │         │       │
-        └────┬────┴───┬───┘
-             ▼        ▼
-        [Dashboards] [Alerts] [Incidents]
-```
-
----
-
-## 📁 Project Structure
-
-```
-port_scan_detection_lab/
-│
-├── attack_simulation/
-│   ├── nmap_commands.sh          # Nmap attack simulation commands
-│   └── scan_scenarios.md         # Documented scan techniques
-│
-├── logs/
-│   ├── sample_syslog.log         # Firewall/UFW logs
-│   ├── sample_auth.log           # SSH authentication logs
-│   ├── sample_firewall.log       # Custom firewall logs
-│   ├── zeek_conn.log             # Zeek network logs
-│   └── suricata_eve.json         # Suricata IDS alerts
-│
-├── detections/
-│   ├── splunk_queries.spl        # 13 Splunk SPL queries
-│   ├── elk_kql_queries.txt       # 15 ELK KQL queries
-│   └── elastic_dsl_queries.json  # 15 Elasticsearch DSL queries
-│
-├── dashboards/
-│   ├── splunk_dashboard.json     # Pre-built Splunk dashboard
-│   └── kibana_dashboard_guide.md # Step-by-step Kibana setup
-│
-├── testing/
-│   ├── test_cases.md             # 15 comprehensive test cases
-│   └── validation_steps.md       # Validation procedures
-│
-├── install.sh                    # Automated setup script
-├── run_lab.sh                    # Main lab execution script
-├── requirements.txt              # Python dependencies
-└── README.md                     # This file
-```
-
----
-
-## ⚙️ Installation
-
-### Option 1: Automated Installation
+Start the API in terminal 1:
 
 ```bash
-# Full automated setup (requires sudo)
-sudo bash install.sh
-
-# Sets up:
-# - System dependencies (Nmap, Python, tools)
-# - Directory structure
-# - Python virtual environment
-# - Permissions
+./run_lab.sh
 ```
 
-### Option 2: Manual Installation
+Start the frontend in terminal 2:
 
 ```bash
-# Install dependencies
-sudo apt-get update
-sudo apt-get install -y nmap tcpdump zeek suricata python3 python3-pip
-
-# Create directories
-mkdir -p logs detections dashboards testing
-
-# Install Python deps
-pip3 install -r requirements.txt
-
-# Make scripts executable
-chmod +x attack_simulation/nmap_commands.sh
-chmod +x run_lab.sh
+npm run dev
 ```
 
-### Option 3: Docker Setup
+Open <http://localhost:3000>. Use **Generate demo events** to create explicitly simulated events. The dashboard refreshes every 15 seconds. Use **Log ingestion** to load an offline file. The API health check is at <http://localhost:8000/health>; interactive API docs are at <http://localhost:8000/docs>.
 
-```dockerfile
-FROM kalilinux/kali-rolling
-RUN apt-get update && apt-get install -y nmap splunk-forwarder filebeat
-COPY . /lab
-WORKDIR /lab
-RUN bash install.sh
-CMD ["bash", "run_lab.sh"]
-```
+The API binds to loopback by default. Change `LAB_HOST`, `LAB_PORT`, `LAB_DATABASE_URL`, and `LAB_CORS_ORIGINS` only for a deliberate local deployment. Do not bind to a public interface without adding authentication and deployment hardening.
+
+## Run Tests
 
 ```bash
-# Build and run
-docker build -t port-scan-lab .
-docker run -it port-scan-lab
+.venv/bin/python -m pytest -q
+npm run build
+bash -n install.sh run_lab.sh nmap_commands.sh
 ```
 
----
+The Python tests cover schema validation, supported sample parsing, malformed lines, deterministic generation, positive scan scenarios, benign negative cases, API persistence, and duplicate ingestion. They do not establish real-world detection accuracy or performance.
 
-## 🎯 Attack Simulation
+## Detection Behavior
 
-### Supported Nmap Scan Techniques
+The current default threshold is eight distinct TCP destination ports for horizontal scanning or eight destinations on one TCP port for a vertical sweep. SYN detection requires at least that many distinct ports with SYN present and ACK absent. FIN, NULL, and XMAS indicators require at least three matching events across three ports. These are configurable in the Python detection function, not yet exposed as operator settings. A single event does not create an alert.
 
-All scans require proper authorization and should only be executed in authorized lab environments.
+Severity and confidence are simple deterministic heuristics based primarily on observed port count; they are not calibrated risk probabilities. FIN/NULL/XMAS classification is impossible when a sensor omits TCP flags. A Zeek connection summary is not a packet capture and must not be interpreted as proof of individual packet flags. The included UFW parser supports syslog lines containing `SRC`, `DST`, and optional port/protocol fields; it is not a general parser for all firewall products.
 
-#### 1. **TCP SYN Scan** (-sS)
-```bash
-nmap -sS 192.168.1.100
+## Offline Log Ingestion
 
-# Detection: Multiple SYN packets without completion
-# Indicates: Stealth reconnaissance
-# Severity: HIGH
-```
+The UI accepts UTF-8 files up to 5 MiB. Supported formats:
 
-#### 2. **TCP Connect Scan** (-sT)
-```bash
-nmap -sT 192.168.1.100
+- Zeek TSV `conn.log` with a `#fields` header.
+- Suricata EVE JSON Lines records.
+- UFW-style syslog records with source and destination IP fields.
 
-# Detection: Complete three-way handshakes to multiple ports
-# Indicates: Full connection attempts
-# Severity: MEDIUM
-```
+Example with the included fixture: select **Log ingestion**, choose **Zeek conn.log**, select `port_scan_detection_lab/logs/zeek_conn.log`, then choose **Parse and ingest**. The result reports parsed records, accepted events, duplicates, malformed lines, and alerts. No live collection is implied.
 
-#### 3. **FIN Scan** (-sF)
-```bash
-nmap -sF 192.168.1.100
+## API Endpoints
 
-# Detection: FIN flag packets to closed ports
-# Indicates: Stealth technique
-# Severity: HIGH
-```
+- `GET /health`: confirms the database can execute a query.
+- `GET /api/dashboard/summary`: counts persisted events and alerts.
+- `GET /api/events?limit=100&offset=0`: paginated normalized events; optional `source_ip` and `protocol` filters.
+- `GET /api/alerts?limit=100&offset=0`: paginated persisted alerts.
+- `POST /api/demo/generate?scenario=syn&count=40`: generate local synthetic events (`syn`, `connect`, `sweep`, `fin`, `null`, `xmas`, or `benign`).
+- `POST /api/ingest/upload?format=zeek`: multipart upload; `format` may be `zeek`, `suricata`, or `firewall`.
 
-#### 4. **NULL Scan** (-sN)
-```bash
-nmap -sN 192.168.1.100
+## Repository Map
 
-# Detection: No TCP flags set
-# Indicates: Advanced reconnaissance
-# Severity: CRITICAL
-```
+- `backend/app/`: API, SQLite models, event schema, parsers, generator, and detections.
+- `app/`: Next.js dashboard and visual system.
+- `tests/`: backend unit and API integration tests.
+- `port_scan_detection_lab/`: original sample logs and SIEM reference material; those SIEM artifacts are not connected to a live integration.
+- `docs/PROJECT_AUDIT.md`: verified initial repository audit.
+- `docs/IMPLEMENTATION_PLAN.md`: phases and verification gates.
+- `docs/INSTALLATION.md`: beginner setup, including Windows with an Ubuntu/Kali VM.
 
-#### 5. **XMAS Scan** (-sX)
-```bash
-nmap -sX 192.168.1.100
+## Current Limitations
 
-# Detection: FIN+PSH+URG flags simultaneously
-# Indicates: Advanced stealth scan
-# Severity: CRITICAL
-```
+- No Splunk or Elasticsearch client is implemented; the existing query/dashboard files remain reference examples and are not verified against this API's schema.
+- No controlled Nmap runner, sensor process, live packet capture, low-and-slow/distributed detector, or dedicated TCP Connect detector.
+- No analyst authentication, alert assignment/status workflow, incident management, audit trail, PDF reports, or detection evaluation metrics.
+- No Docker deployment or CI workflow yet. PostgreSQL configuration is not validated.
+- Dashboard charts summarize the latest 500 records loaded by the UI. The API summary counts stored events, but filtering, sorting, and server-side time-window queries remain limited.
+- Synthetic fixture tests validate implemented behavior, not field performance on production traffic.
 
-#### 6. **ACK Scan** (-sA)
-```bash
-nmap -sA 192.168.1.100
-
-# Detection: ACK packets without prior connection
-# Indicates: Firewall rule mapping
-# Severity: MEDIUM
-```
-
-#### 7. **Version Detection** (-sV)
-```bash
-nmap -sV 192.168.1.100
-
-# Detection: Service identification attempts
-# Indicates: Vulnerability discovery phase
-# Severity: MEDIUM
-```
-
-#### 8. **Aggressive Scan** (-A)
-```bash
-nmap -A 192.168.1.100
-
-# Detection: Combined techniques (OS, service detection, traceroute)
-# Indicates: Thorough reconnaissance
-# Severity: HIGH
-```
-
-### Executing Scans in Lab
-
-```bash
-# View available scan commands
-cat attack_simulation/nmap_commands.sh
-
-# Generate test logs (no actual scanning required)
-python3 log_generator.py --scan-type syn --target 192.168.1.100
-
-# Ingest generated logs
-bash run_lab.sh
-```
-
----
-
-## 🔍 Detection Rules
-
-### Detection Strategies Implemented
-
-#### 1. **SYN Scan Detection**
-```
-Trigger: > 20 unique ports in 60 seconds from single source
-Confidence: HIGH
-Severity: HIGH
-```
-
-#### 2. **Port Sweep Detection**
-```
-Trigger: > 15 unique targets on same port in 60 seconds
-Confidence: HIGH
-Severity: HIGH
-```
-
-#### 3. **Stealth Scan Detection**
-```
-Trigger: FIN, NULL, or XMAS packets detected
-Confidence: VERY HIGH
-Severity: CRITICAL
-```
-
-#### 4. **Low-and-Slow Detection**
-```
-Trigger: 20+ connections over 5-10 minute window
-Confidence: MEDIUM
-Severity: MEDIUM
-```
-
-#### 5. **Multi-Technique Detection**
-```
-Trigger: Same source using multiple scan types
-Confidence: VERY HIGH
-Severity: CRITICAL
-```
-
-### Query Examples
-
-**Splunk - SYN Scan:**
-```spl
-index=firewall sourcetype=syslog "SYN" 
-| stats count as syn_count, dc(DPT) as unique_ports by src_ip 
-| where unique_ports > 20
-```
-
-**ELK - SYN Scan:**
-```json
-{
-  "query": {
-    "bool": {
-      "must": [{ "match": { "tcp.flags": "SYN" } }]
-    }
-  },
-  "aggs": {
-    "by_source": {
-      "terms": { "field": "source.ip" },
-      "aggs": {
-        "unique_ports": { "cardinality": { "field": "destination.port" } }
-      }
-    }
-  }
-}
-```
-
-### Advanced Features
-
-- **False Positive Reduction:** Whitelist known scanners (Nessus, Qualys, internal tools)
-- **Threshold Tuning:** Adjust based on baseline traffic analysis
-- **Time Window Customization:** 1, 5, 10-minute windows depending on sensitivity
-- **Multi-Technique Correlation:** Detect sophisticated attackers using multiple methods
-
----
-
-## 📊 Dashboards
-
-### Splunk Dashboard
-
-Features:
-- Total blocked connections (metric)
-- Unique scanning source IPs (metric)
-- High-risk alert count (metric)
-- Top 10 scanning IPs (bar chart)
-- Scan technique distribution (pie chart)
-- Most targeted ports (bar chart)
-- Activity timeline (line chart)
-- Detailed threat investigation tables
-- Multi-technique scan detection
-
-Import: `dashboards/splunk_dashboard.json`
-
-### Kibana/ELK Dashboard
-
-Setup guide: `dashboards/kibana_dashboard_guide.md`
-
-Includes:
-1. Overview dashboard (metrics + charts)
-2. Threat investigation dashboard (detailed tables)
-3. Operational metrics dashboard (SLA, alert effectiveness)
-4. Geographical distribution (maps)
-5. ML-based anomaly detection
-
----
-
-## 🧪 Testing & Validation
-
-### Test Coverage
-
-- **15 test cases** covering all detection types
-- **Unit tests** for individual detection rules
-- **Integration tests** for end-to-end workflows
-- **Performance tests** for query optimization
-- **False positive analysis** for threshold tuning
-
-### Running Tests
-
-```bash
-# Splunk query validation
-splunk show saved-searches | grep port_scan
-
-# Elasticsearch DSL validation
-python3 -m json.tool detections/elastic_dsl_queries.json
-
-# Quick validation
-bash testing/validation_steps.md
-
-# Full test suite
-python3 testing/test_automation.py
-```
-
-### Test Results
-
-Example execution:
-```
-✓ Test 1: SYN Scan Detection PASSED
-✓ Test 2: FIN Scan Detection PASSED
-✓ Test 3: NULL Scan Detection PASSED
-✓ Test 4: Port Sweep Detection PASSED
-✓ Test 5: XMAS Scan Detection PASSED
-✓ Test 6: Multi-Technique Detection PASSED
-✓ Test 7: Whitelist Exclusion PASSED
-✓ Test 8: Low-and-Slow Detection PASSED
-
-Results: 8 passed, 0 failed
-```
-
----
-
-## 💼 Professional Development
-
-### Resume Impact
-
-Use this lab to demonstrate:
-
-**Detection Engineering:**
-- Advanced threat hunting and reconnaissance detection
-- SIEM query optimization (SPL, KQL, DSL)
-- False-positive reduction techniques
-- Threshold tuning and baseline analysis
-- Multi-technique attack correlation
-
-**SIEM Expertise:**
-- Splunk deployment and administration
-- Elasticsearch/Kibana visualization
-- Real-time alerting and incident response
-- Dashboard design for analysts
-- Query performance optimization
-
-**Cybersecurity Knowledge:**
-- Network attack methodologies (Nmap)
-- TCP/IP protocol analysis
-- Firewall log interpretation
-- IDS/IPS rule development
-- Reconnaissance attack patterns
-
-### Resume Bullet Points
-
-✓ Engineered 15+ detection rules identifying port scanning reconnaissance with <2% false positive rate  
-✓ Designed real-time SIEM dashboards for 10K+ events/sec with <5s query response time  
-✓ Implemented multi-technique attack correlation detecting sophisticated reconnaissance campaigns  
-✓ Reduced alert fatigue 40% through whitelist-based false positive exclusion and threshold optimization  
-✓ Built comprehensive test suite with 15 test cases validating 100% detection accuracy  
-
-### Interview Talking Points
-
-**"Tell me about a detection rule you built..."**
-> "I developed a SYN scan detection rule that identifies when a single source IP probes more than 20 unique ports within 60 seconds. I tuned the threshold after analyzing baseline traffic to eliminate false positives from legitimate network tools, while maintaining 95%+ detection accuracy for actual reconnaissance attempts."
-
-**"How do you approach SIEM query optimization?"**
-> "I focus on three areas: (1) Query structure - using filters before aggregations to reduce dataset size, (2) Index optimization - ensuring frequently searched fields are keyword type with doc_values enabled, and (3) Visualization design - implementing summary indexing for dashboards that would otherwise require expensive searches."
-
-**"Walk me through your alert tuning process..."**
-> "First, I establish a baseline by collecting 7-14 days of normal traffic and analyzing the 95th percentile of normal behavior. Then I set thresholds at 2-3 standard deviations above baseline. For production rules, I test against historical data ensuring <1% false positives while maintaining >90% detection rate for actual attacks."
-
-**"How do you handle detection evasion techniques?"**
-> "I focus on behavioral indicators rather than just signature matching. For example, instead of detecting just SYN packets, I look for patterns - multiple unique ports in short time windows. I also implement multi-technique correlation rules that catch attackers switching between SYN, FIN, and NULL scans."
-
----
-
-## 🔧 Configuration
-
-### Splunk Configuration
-
-```bash
-# 1. Configure HEC input
-Settings > Data Inputs > HTTP Event Collector
-- New Token: port-scan-lab
-- Source type: firewall_logs
-- Index: main (or custom)
-
-# 2. Test connectivity
-curl -X POST https://localhost:8088/services/collector \
-  -H "Authorization: Splunk your-token" \
-  -d '{"event":"test"}'
-```
-
-### Elasticsearch/Kibana Configuration
-
-```bash
-# 1. Create index pattern
-PUT firewall-logs
-{
-  "mappings": {
-    "properties": {
-      "@timestamp": { "type": "date" },
-      "source.ip": { "type": "ip" },
-      "destination.port": { "type": "integer" },
-      "tcp.flags": { "type": "keyword" }
-    }
-  }
-}
-
-# 2. Set index pattern in Kibana
-Stack Management > Index Patterns > firewall-logs*
-
-# 3. Create data view
-```
-
-### Alert Configuration
-
-**Splunk:**
-```
-Settings > Searches, Reports, and Alerts > Alert > New Alert
-- Search: index=firewall | stats dc(DPT) by SRC
-- Condition: > 20
-- Action: Send Email/Slack
-```
-
-**Kibana:**
-```
-Stack Management > Rules and Connectors > Create Rule
-- Type: Search Threshold
-- Query: tcp.flags:"SYN"
-- Threshold: cardinality(destination.port) > 20
-- Notification: Email/Slack
-```
-
----
-
-## 📚 Additional Resources
-
-### Documentation Files
-
-- **detections/splunk_queries.spl** - 13 production-ready Splunk queries with documentation
-- **detections/elk_kql_queries.txt** - 15 KQL queries with explanations
-- **detections/elastic_dsl_queries.json** - 15 Elasticsearch DSL queries with implementation notes
-- **testing/test_cases.md** - Comprehensive test case documentation
-- **testing/validation_steps.md** - Step-by-step validation procedures
-- **dashboards/kibana_dashboard_guide.md** - Complete Kibana setup guide
-
-### External Resources
-
-- [Nmap Documentation](https://nmap.org/docs.html)
-- [Splunk SPL Reference](https://docs.splunk.com/Documentation/Splunk/latest/SearchReference)
-- [Elasticsearch Query DSL](https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl.html)
-- [Kibana Alerting](https://www.elastic.co/guide/en/kibana/current/alerting-getting-started.html)
-- [Network Intrusion Detection - SANS](https://www.sans.org/white-papers/)
-
----
-
-## ❓ FAQ
-
-### Q: Can I use this lab in production?
-**A:** This is a training/testing lab. In production, adjust thresholds based on YOUR baseline traffic, exclude YOUR legitimate scanners, and implement additional context (user activity, threat intel). Never blindly copy thresholds - always tune them.
-
-### Q: How do I reduce false positives?
-**A:** 
-1. Collect 7-14 days of baseline traffic
-2. Whitelist known scanners (Nessus, Qualys, internal tools)
-3. Increase thresholds above 95th percentile of normal activity
-4. Implement context-aware rules (time of day, user, department)
-
-### Q: What if my fields have different names?
-**A:** Edit queries to match your field naming. Examples:
-- Replace `src_ip` with `source.ip` or `SRC`
-- Replace `DPT` with `destination.port`
-- Replace `tcp.flags` with `flags`
-
-### Q: How do I handle encrypted traffic?
-**A:** This lab focuses on firewall logs which contain metadata even for encrypted traffic. For encrypted payload analysis, implement:
-- TLS fingerprinting
-- Certificate logging
-- Behavioral analysis on encrypted flows
-
-### Q: Can I use this for red team testing?
-**A:** Yes! The attack simulation section provides documented techniques. However, only execute in authorized lab environments with proper approval and documentation.
-
-### Q: How often should I update thresholds?
-**A:** Review quarterly or when:
-- Significant network changes occur
-- New legitimate tools are deployed
-- False positive rate increases
-- Detection coverage decreases
-
----
-
-## 📞 Support
-
-### Troubleshooting
-
-**Query Returns No Results:**
-1. Verify logs were ingested: `index=firewall | stats count`
-2. Check field names match actual data
-3. Adjust time range: `earliest=-24h latest=now`
-4. Review field extraction on source type
-
-**Slow Dashboard:**
-1. Reduce time range
-2. Add filters to limit data
-3. Use summary indexing for frequent queries
-4. Check query performance in Dev Tools
-
-**Alerts Not Triggering:**
-1. Verify rule is enabled
-2. Check threshold value
-3. Review rule execution logs
-4. Test with sample data
-
-### Professional Support
-
-- [Splunk Community](https://community.splunk.com/)
-- [Elastic Community](https://www.elastic.co/community/)
-- [SANS Cyber Aces](https://www.cyberaces.org/)
-
----
-
-## 📄 License & Attribution
-
-**Educational Use:** This lab is provided for cybersecurity education and authorized testing only.
-
-**Responsible Use:** 
-- Obtain proper authorization before executing any scans
-- Use only in lab or authorized environments
-- Document all testing activities
-- Never target unauthorized systems
-
----
-
-## 🎓 Certification Prep
-
-This lab is excellent preparation for:
-- **GIAC Security Essentials (GSEC)**
-- **GIAC Network Defender (GNED)**
-- **Certified Information Systems Security Professional (CISSP)**
-- **CompTIA Security+**
-- **Splunk Core Certified User**
-- **Elastic Certified Analyst**
-
----
-
-## 📈 Project Statistics
-
-| Metric | Value |
-|--------|-------|
-| Detection Queries | 15+ |
-| Test Cases | 15 |
-| Sample Logs | 5 types |
-| Attack Techniques | 8 |
-| Documentation Pages | 10+ |
-| Lines of Code/Config | 5000+ |
-| Time to Complete | 30-45 min |
-| Difficulty Level | Intermediate-Advanced |
-
----
-
-## 🔄 Version History
-
-- **v1.0** (2024-02-23) - Initial release
-  - 15 detection queries
-  - 15 test cases
-  - Splunk & ELK support
-  - Comprehensive dashboards
-
----
-
-**Last Updated:** February 23, 2024  
-**Maintained By:** SOC Detection Engineering Team  
-**Status:** Production-Ready ✅
-
----
-
-## 🙋 Feedback & Contributions
-
-Have improvements? Questions? Issues?
-
-1. Review the documentation files
-2. Check the FAQ section above
-3. Run validation_steps.md for troubleshooting
-4. Consult the test cases for expected behavior
-
----
-
-**Happy Hunting! 🎯**
+See [the installation guide](docs/INSTALLATION.md), [the implementation plan](docs/IMPLEMENTATION_PLAN.md), and [the audit](docs/PROJECT_AUDIT.md) before presenting feature status.

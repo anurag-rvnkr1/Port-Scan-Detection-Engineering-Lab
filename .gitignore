@@ -8,3 +8,8 @@ node_modules/
 .next/
 .env*.local
 .DS_Store
+.venv/
+__pycache__/
+.pytest_cache/
+data/*.db
+data/*.db-*
