@@ -5,7 +5,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY requirements.lock /app/requirements.lock
-RUN python -m pip install --no-cache-dir --requirement /app/requirements.lock \
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y nmap \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir --requirement /app/requirements.lock \
     && addgroup --system --gid 10001 sentinelsoc \
     && adduser --system --uid 10001 --ingroup sentinelsoc --home /app sentinelsoc \
     && mkdir -p /app/data \

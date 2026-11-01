@@ -44,6 +44,7 @@ from backend.app.database import (
     EventRow,
     IncidentRow,
     IntegrationDeliveryRow,
+    NmapScanRow,
     SessionLocal,
     UserRow,
     create_tables,
@@ -59,6 +60,16 @@ from backend.app.integrations import (
 from backend.app.pipeline import DEFAULT_THRESHOLD, IPNetwork, detect_scans, parse_log, parse_source_allowlist
 from backend.app.pcap import PcapFormatError, PcapRecordLimitError, parse_pcap
 from backend.app.reports import ReportPeriod, generate_soc_pdf
+from backend.app.scanner import (
+    COMMON_PORTS,
+    NmapConfigurationError,
+    NmapExecutionError,
+    NmapUnavailable,
+    SCAN_LOCK,
+    build_command,
+    execute_command,
+    load_configuration as load_nmap_configuration,
+)
 from backend.app.schemas import NetworkEvent
 
 
@@ -219,6 +230,21 @@ class UserActiveUpdate(BaseModel):
     is_active: bool
 
 
+NmapPort = Annotated[int, Field(strict=True, ge=1, le=65535)]
+
+
+class NmapScanCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: str = Field(min_length=2, max_length=45)
+    profile: Literal["common_ports", "selected_ports", "host_discovery"] = "common_ports"
+    scan_type: Literal["tcp_connect", "syn"] = "tcp_connect"
+    ports: list[NmapPort] | None = Field(default=None, min_length=1, max_length=256)
+    service_detection: bool = False
+    timeout_seconds: int = Field(default=60, ge=5, le=300)
+    confirm_authorized: Literal[True]
+
+
 def _record_audit(session: Session, entity_type: str, entity_id: str, action: str, actor: str, details: dict) -> None:
     session.add(
         AuditLogRow(
@@ -245,6 +271,25 @@ def _incident_payload(row: IncidentRow) -> dict:
         "updated_at": row.updated_at.isoformat(),
         "resolution": row.resolution,
     }
+
+
+def _nmap_scan_payload(row: NmapScanRow, *, include_result: bool = True) -> dict:
+    payload = {
+        "scan_id": row.id,
+        "target": row.target,
+        "profile": row.profile,
+        "scan_type": row.scan_type,
+        "ports": row.ports,
+        "service_detection": row.service_detection,
+        "status": row.status,
+        "started_at": row.started_at.isoformat(),
+        "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        "initiated_by": row.initiated_by,
+        "error": row.error,
+    }
+    if include_result:
+        payload["result"] = row.result
+    return payload
 
 
 def _validate_assignee(session: Session, username: str | None) -> None:
@@ -828,6 +873,145 @@ def update_incident(
     )
     session.commit()
     return _incident_payload(row)
+
+
+@app.get("/api/nmap/status")
+def nmap_status(_: Annotated[UserRow, Depends(require_admin)]) -> dict:
+    try:
+        configuration = load_nmap_configuration()
+    except NmapConfigurationError:
+        return {
+            "available": False,
+            "enabled": False,
+            "authorized_network_count": 0,
+            "status": "invalid_authorization_configuration",
+        }
+    if configuration.executable is None:
+        status = "nmap_not_installed"
+    elif not configuration.authorized_networks:
+        status = "authorized_targets_not_configured"
+    else:
+        status = "ready"
+    return {
+        "available": configuration.executable is not None,
+        "enabled": configuration.enabled,
+        "authorized_network_count": len(configuration.authorized_networks),
+        "status": status,
+    }
+
+
+@app.get("/api/scans")
+def list_nmap_scans(
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    scans = session.scalars(
+        select(NmapScanRow)
+        .order_by(NmapScanRow.started_at.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return {"items": [_nmap_scan_payload(scan, include_result=False) for scan in scans]}
+
+
+@app.get("/api/scans/{scan_id}")
+def get_nmap_scan(
+    scan_id: str,
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    scan = session.get(NmapScanRow, scan_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    return _nmap_scan_payload(scan)
+
+
+@app.post("/api/scans", status_code=201)
+def create_nmap_scan(
+    scan_request: NmapScanCreate,
+    request: Request,
+    actor: Annotated[UserRow, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    if not request_limiter.allow("nmap-scan", actor.id, 3, 60 * 60):
+        raise HTTPException(status_code=429, detail="Nmap scan rate limit exceeded")
+    try:
+        configuration = load_nmap_configuration()
+    except NmapConfigurationError as error:
+        raise HTTPException(status_code=503, detail="Nmap authorization configuration is invalid") from error
+    if not configuration.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Active scanning is disabled until Nmap is installed and authorized lab CIDRs are configured",
+        )
+    try:
+        command = build_command(
+            target=scan_request.target,
+            profile=scan_request.profile,
+            scan_type=scan_request.scan_type,
+            ports=scan_request.ports,
+            service_detection=scan_request.service_detection,
+            configuration=configuration,
+        )
+    except NmapConfigurationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if not SCAN_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Another Nmap scan is already running")
+
+    scan_ports = (
+        list(COMMON_PORTS)
+        if scan_request.profile == "common_ports"
+        else sorted(scan_request.ports or [])
+        if scan_request.profile == "selected_ports"
+        else []
+    )
+    now = datetime.now(timezone.utc)
+    row = NmapScanRow(
+        id=str(uuid4()),
+        target=command[-1],
+        profile=scan_request.profile,
+        scan_type=scan_request.scan_type,
+        ports=scan_ports,
+        service_detection=scan_request.service_detection,
+        status="running",
+        started_at=now,
+        completed_at=None,
+        initiated_by=actor.username,
+        result=None,
+        error=None,
+    )
+    session.add(row)
+    _record_audit(
+        session,
+        "nmap_scan",
+        row.id,
+        "started",
+        actor.username,
+        {"target": row.target, "profile": row.profile, "scan_type": row.scan_type},
+    )
+    session.commit()
+    try:
+        try:
+            row.result = execute_command(command, scan_request.timeout_seconds)
+            row.status = "completed"
+        except (NmapExecutionError, NmapUnavailable) as error:
+            row.status = "failed"
+            row.error = str(error)[:240]
+        row.completed_at = datetime.now(timezone.utc)
+        _record_audit(
+            session,
+            "nmap_scan",
+            row.id,
+            row.status,
+            actor.username,
+            {"target": row.target, "status": row.status},
+        )
+        session.commit()
+        return _nmap_scan_payload(row)
+    finally:
+        SCAN_LOCK.release()
 
 
 @app.get("/api/reports/summary")

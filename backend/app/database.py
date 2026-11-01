@@ -117,6 +117,23 @@ class IntegrationDeliveryRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class NmapScanRow(Base):
+    __tablename__ = "nmap_scans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    target: Mapped[str] = mapped_column(String(45), index=True)
+    profile: Mapped[str] = mapped_column(String(24))
+    scan_type: Mapped[str] = mapped_column(String(24))
+    ports: Mapped[list[int]] = mapped_column(JSON)
+    service_detection: Mapped[bool]
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    initiated_by: Mapped[str] = mapped_column(String(64), index=True)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(240), nullable=True)
+
+
 def create_tables() -> None:
     if not USE_DATABASE_MIGRATIONS:
         Base.metadata.create_all(bind=engine)
