@@ -70,6 +70,15 @@ Stop the stack with `docker compose down`; named database volumes remain in plac
 
 The frontend API proxy target is supplied as a build argument (`http://api:8000` in Compose) and is internal to the Docker network. If changing this target, rebuild the frontend image. Do not put credentials in this value.
 
+### Optional SIEM delivery
+
+The backend accepts these variables through `.env`; keep tokens out of source control and use a local-only file with restricted permissions:
+
+- Splunk: `SENTINELSOC_SPLUNK_HEC_URL` must be the full `https://.../services/collector/event` URL; set `SENTINELSOC_SPLUNK_HEC_TOKEN`.
+- Elasticsearch: set `SENTINELSOC_ELASTICSEARCH_URL` to an HTTPS origin, `SENTINELSOC_ELASTICSEARCH_API_KEY`, and optionally `SENTINELSOC_ELASTICSEARCH_INDEX` (defaults to `sentinelsoc-events`).
+
+Unencrypted HTTP is accepted only for loopback integration testing. TLS certificate verification remains enabled. Leave values blank for offline-only operation. Recreate the API service after changing environment values. Admins can inspect `GET /api/integrations`, send a controlled test event with `POST /api/integrations/{splunk|elasticsearch}/test`, and retry a failed event/alert batch using `POST /api/integrations/deliveries/{delivery_id}/retry`. New ingested events and generated alerts are delivered to enabled integrations; outcomes are recorded in PostgreSQL. Delivery and retry requests are synchronous, and live service ingestion/search was not verified.
+
 ## Data Backup and Restore
 
 For this local SQLite prototype, stop the API before copying `data/soc_lab.db` to a protected backup location. Restore by stopping the API and replacing that single database file with a known-good copy. This is a manual local procedure, not a tested production backup system. Protect backups because event payloads may contain sensitive network metadata and raw records.

@@ -14,11 +14,14 @@ flowchart LR
   Schema --> Detection[Explainable scan heuristics]
   Schema --> Persistence[(SQLAlchemy / SQLite)]
   Detection --> Persistence
+  Persistence --> Integrations[Optional Splunk HEC / Elasticsearch delivery]
   API --> Persistence
   Persistence --> Reports[ReportLab PDF / CSV]
 ```
 
 The application is a synchronous prototype. SQLite local development continues to create missing tables with SQLAlchemy `create_all`; Docker Compose uses PostgreSQL 17 and runs Alembic before starting the API. PostgreSQL URLs are normalized to the psycopg 3 driver. The local Compose stack was built and smoke-tested; this is not production deployment support. Its API and database share an internal network, while the frontend is the only service published and binds to host loopback. Authenticated report requests aggregate persisted records and generate PDFs in the API process.
+
+When SIEM environment settings are present, newly persisted event batches and generated alert batches are delivered synchronously from the ingest request. Batches are capped at 250 records; successful batch IDs are deduplicated and all outcomes are stored in `integration_deliveries`. Failures do not roll back local event storage. Administrators can retry persisted failed event/alert batches explicitly. A durable background worker, scheduled retries, and delivery backpressure are still needed before larger deployments.
 
 ## Event Flow
 
@@ -38,6 +41,7 @@ The application is a synchronous prototype. SQLite local development continues t
 | `audit_log` | Local workflow actions with timestamp, authenticated actor, and structured details. |
 | `users` | Local account identifier, scrypt password hash, role, active state, and creation timestamp. |
 | `auth_sessions` | Hashes of opaque session and CSRF tokens, owning user, and expiry. |
+| `integration_deliveries` | Batch IDs, remote delivery status/attempt count, safe error summary, and event/alert identifiers. No SIEM credentials or remote response bodies are stored. |
 
 The initial Alembic revision creates these tables and indexes. Foreign-key relationships, normalized team/permission entities, retention jobs, and multi-tenant isolation are not implemented.
 
@@ -53,4 +57,4 @@ Implemented rules and limitations are tracked in [FEATURE_STATUS.md](./FEATURE_S
 
 ## Target Architecture Not Yet Present
 
-Redis/Celery, WebSockets/SSE, live sensors, authorized Nmap jobs, Splunk/Elasticsearch clients, and production TLS, backup, monitoring, and scaling controls are future work. Offline PCAP parsing, PostgreSQL/Alembic, local Docker Compose, and CI configuration exist, but only the scoped checks described in [FEATURE_STATUS.md](./FEATURE_STATUS.md) are verified.
+Redis/Celery, WebSockets/SSE, live sensors, authorized Nmap jobs, SIEM search/health workflows, and production TLS, backup, monitoring, and scaling controls are future work. Offline PCAP parsing, PostgreSQL/Alembic, local Docker Compose, SIEM delivery, and CI configuration exist, but only the scoped checks described in [FEATURE_STATUS.md](./FEATURE_STATUS.md) are verified.

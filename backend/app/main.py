@@ -11,7 +11,7 @@ import os
 import secrets
 import threading
 import time
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -49,7 +49,13 @@ from backend.app.database import (
     create_tables,
 )
 from backend.app.generator import SCENARIOS, generate_events
-from backend.app.integrations import IntegrationName, deliver_records, integration_status, send_test_event
+from backend.app.integrations import (
+    IntegrationName,
+    deliver_records,
+    integration_status,
+    retry_delivery,
+    send_test_event,
+)
 from backend.app.pipeline import DEFAULT_THRESHOLD, IPNetwork, detect_scans, parse_log, parse_source_allowlist
 from backend.app.pcap import PcapFormatError, PcapRecordLimitError, parse_pcap
 from backend.app.reports import ReportPeriod, generate_soc_pdf
@@ -909,7 +915,7 @@ def test_integration(
     if not request_limiter.allow("integration-test", actor.id, 5, 60 * 60):
         raise HTTPException(status_code=429, detail="Integration test rate limit exceeded")
     try:
-        delivery = send_test_event(session, integration_name)  # type: ignore[arg-type]
+        delivery = send_test_event(session, cast(IntegrationName, integration_name))
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     _record_audit(
@@ -927,6 +933,43 @@ def test_integration(
     session.commit()
     return {
         "integration": integration_name,
+        "status": delivery.status,
+        "attempts": delivery.attempts,
+        "http_status": delivery.http_status,
+        "error": delivery.error,
+    }
+
+
+@app.post("/api/integrations/deliveries/{delivery_id}/retry")
+def retry_integration_delivery(
+    delivery_id: str,
+    request: Request,
+    actor: Annotated[UserRow, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    if not request_limiter.allow("integration-retry", actor.id, 10, 60 * 60):
+        raise HTTPException(status_code=429, detail="Integration retry rate limit exceeded")
+    try:
+        delivery = retry_delivery(session, delivery_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    _record_audit(
+        session,
+        "integration",
+        delivery.id,
+        "delivery_retry",
+        actor.username,
+        {
+            "integration": delivery.integration,
+            "status": delivery.status,
+            "http_status": delivery.http_status,
+        },
+    )
+    session.commit()
+    return {
+        "integration": delivery.integration,
         "status": delivery.status,
         "attempts": delivery.attempts,
         "http_status": delivery.http_status,

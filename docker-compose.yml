@@ -29,6 +29,11 @@ services:
       LAB_COOKIE_SECURE: "false"
       LAB_TRUSTED_LOOPBACK_PROXY: "true"
       LAB_CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}
+      SENTINELSOC_SPLUNK_HEC_URL: ${SENTINELSOC_SPLUNK_HEC_URL:-}
+      SENTINELSOC_SPLUNK_HEC_TOKEN: ${SENTINELSOC_SPLUNK_HEC_TOKEN:-}
+      SENTINELSOC_ELASTICSEARCH_URL: ${SENTINELSOC_ELASTICSEARCH_URL:-}
+      SENTINELSOC_ELASTICSEARCH_API_KEY: ${SENTINELSOC_ELASTICSEARCH_API_KEY:-}
+      SENTINELSOC_ELASTICSEARCH_INDEX: ${SENTINELSOC_ELASTICSEARCH_INDEX:-sentinelsoc-events}
     command: ["sh", "-c", "alembic upgrade head && exec uvicorn backend.app.main:app --host 0.0.0.0 --port 8000"]
     depends_on:
       postgres:

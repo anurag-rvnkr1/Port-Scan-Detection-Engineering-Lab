@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import time
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -17,7 +17,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.app.database import IntegrationDeliveryRow
+from backend.app.database import AlertRow, EventRow, IntegrationDeliveryRow
 
 
 LOGGER = logging.getLogger(__name__)
@@ -331,3 +331,33 @@ def send_test_event(session: Session, name: IntegrationName) -> IntegrationDeliv
         "message": "SentinelSOC integration connectivity test",
     }
     return deliver_records(session, name, "test_event", [event])[0]
+
+
+def retry_delivery(session: Session, delivery_id: str) -> IntegrationDeliveryRow:
+    delivery = session.get(IntegrationDeliveryRow, delivery_id)
+    if delivery is None:
+        raise LookupError("Delivery record not found")
+    if delivery.status == "delivered":
+        return delivery
+    if delivery.record_type == "test_event":
+        raise ValueError("Test-event deliveries cannot be retried; send a new test event")
+    if delivery.record_type == "network_event":
+        rows = session.scalars(select(EventRow).where(EventRow.id.in_(delivery.record_ids))).all()
+        payload_by_id = {row.id: row.payload for row in rows}
+        records = [payload_by_id[record_id] for record_id in delivery.record_ids if record_id in payload_by_id]
+    else:
+        rows = session.scalars(select(AlertRow).where(AlertRow.id.in_(delivery.record_ids))).all()
+        payload_by_id = {row.id: row.payload for row in rows}
+        records = [payload_by_id[record_id] for record_id in delivery.record_ids if record_id in payload_by_id]
+    if len(records) != len(delivery.record_ids):
+        raise ValueError("Some records for this delivery are no longer available")
+    if delivery.integration not in {"splunk", "elasticsearch"}:
+        raise ValueError("Delivery record contains an unsupported integration")
+    if delivery.record_type not in {"network_event", "security_alert"}:
+        raise ValueError("Delivery record contains an unsupported record type")
+    return deliver_records(
+        session,
+        cast(IntegrationName, delivery.integration),
+        cast(RecordType, delivery.record_type),
+        records,
+    )[0]

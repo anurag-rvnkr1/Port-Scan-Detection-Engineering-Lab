@@ -99,6 +99,7 @@ def test_initial_migration_creates_current_sqlite_schema(tmp_path: Path) -> None
             "audit_log",
             "auth_sessions",
             "incidents",
+            "integration_deliveries",
             "network_events",
             "security_alerts",
             "users",

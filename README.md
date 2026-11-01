@@ -16,6 +16,7 @@ An offline-first network telemetry normalization and port-scan detection lab. Th
 - Manage analyst/viewer accounts and assign alerts/incidents to active analysts; audit entries identify the authenticated account.
 - Investigate alerts with persisted event evidence, update alert status/assignment, create incidents, record incident status changes, and export database-backed SOC summary reports.
 - Generate authenticated database-backed PDF reports with severity charts, ranked event/alert tables, analyst notes, and selectable reporting periods.
+- Optionally deliver normalized events and detections to Splunk HEC and Elasticsearch using environment-configured clients; delivery status is persisted without exposing credentials.
 - Explore the local REST API through OpenAPI at `/docs`.
 
 Synthetic events are visibly labeled and never sent to the network. The application does not capture live traffic. Optional SIEM delivery, Nmap execution, live sensors, and production deployment are not implemented.
@@ -140,6 +141,9 @@ Example with the included fixture: select **Log ingestion**, choose **Zeek conn.
 - `GET/POST /api/incidents` and `GET/PATCH /api/incidents/{incident_id}`: create incidents from alerts and track their status with audit history.
 - `GET /api/reports/summary` and `/api/reports/summary.csv`: generate persisted-record summary reports.
 - `GET /api/reports/summary.pdf?period=weekly&download=true`: generate an authenticated PDF report (`daily`, `weekly`, `monthly`, or `all`; `download=false` previews inline).
+- `GET /api/integrations`: admin-only integration configuration and recent delivery health; tokens are never returned.
+- `POST /api/integrations/splunk/test` and `/api/integrations/elasticsearch/test`: admin-only controlled test-event delivery.
+- `POST /api/integrations/deliveries/{delivery_id}/retry`: admin-only retry for a persisted failed event/alert batch.
 
 Database migrations are managed with Alembic. Apply the initial migration with `.venv/bin/alembic upgrade head`; local SQLite also retains its automatic table initialization. The initial migration was tested on SQLite and PostgreSQL 17, and API database health was verified against the temporary PostgreSQL instance; production deployment is still pending.
 
@@ -162,9 +166,9 @@ This is an offline-first detection engineering prototype, not a production SOC p
 
 ## Current Limitations
 
-- No Splunk or Elasticsearch client is implemented; the existing query/dashboard files remain reference examples and are not verified against this API's schema.
+- Splunk HEC and Elasticsearch delivery clients use bounded retries, TLS verification, batch limits, duplicate suppression, persisted outcomes, and secret-safe status. Contract tests mock both APIs; live ingestion/search has not been verified. There is no settings UI, delivery worker, automatic failed-delivery retry, or remote search workflow yet.
 - No controlled Nmap runner, sensor process, live packet capture, distributed or multi-technique correlation, or operator-facing detection UI. Source-IP/CIDR exclusions and threshold are startup environment settings only. The TCP Connect and low-and-slow heuristics remain simple threshold-based rules.
-- Authentication, backend role checks, audit identity, bounded ingestion, PDF reports, and one Playwright workflow are covered by local checks; full teams, complete E2E coverage, remote CI execution, and production security validation remain pending.
+- Authentication, backend role checks, audit identity, bounded ingestion, PDF reports, optional SIEM delivery, and one Playwright workflow are covered by local checks; full teams, complete E2E coverage, remote CI execution, and production security validation remain pending.
 - PostgreSQL migrations are tested on SQLite and PostgreSQL 17; the local Docker Compose application stack is smoke-tested. Redis/background jobs, container scanning, and production deployment are pending.
 - Dashboard charts summarize the latest 500 records loaded by the UI. The API summary counts stored events, but filtering, sorting, and server-side time-window queries remain limited.
 - Synthetic fixture tests validate implemented behavior, not field performance on production traffic.
