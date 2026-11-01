@@ -384,6 +384,16 @@ tbody tr:hover { background: #20241d; }
   .toolbar-caption { display: none; }
 }
 
+.auth-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(ellipse at 50% 0, #23281d, transparent 52%), var(--soc-bg); }
+.auth-card { width: min(100%, 410px); display: grid; gap: 16px; padding: 28px; border: 1px solid var(--soc-border); border-radius: 8px; background: var(--soc-panel); box-shadow: 0 20px 70px #0005; }
+.auth-card h1 { margin: 8px 0 0; color: var(--soc-text); font-size: 24px; }
+.auth-card > p { margin: -10px 0 4px; color: var(--soc-muted); }
+.auth-card .form-label { margin: 0; }
+.auth-card .button { min-height: 40px; }
+.auth-help { color: var(--soc-muted); line-height: 1.5; }
+.auth-help code { color: var(--soc-lime); }
+.user-badge { color: #aab19f; font-size: 10px; white-space: nowrap; text-transform: capitalize; }
+
 @media (max-width: 420px) {
   .crumb { gap: 6px; font-size: 8px; }
   .live-state { font-size: 8px; }

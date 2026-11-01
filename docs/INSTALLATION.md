@@ -14,6 +14,12 @@ cd Port-Scan-Detection-Engineering-Lab
 ./install.sh
 ```
 
+Create the initial administrator account. The password is requested interactively and stored only as a salted scrypt hash:
+
+```bash
+.venv/bin/python -m backend.app.admin create-admin
+```
+
 Start the backend and frontend in two terminal windows, both in the repository directory:
 
 ```bash
@@ -63,4 +69,4 @@ LAB_DETECTION_SOURCE_ALLOWLIST="198.51.100.27,2001:db8:1234::/48" \
 Allowlisted source events are still persisted; they are excluded only from scan detections. This setting does not configure or authorize network scanning.
 
 No live network traffic is captured. Splunk and Elasticsearch setup is not currently connected to the application.
-This is a single-user local demonstration: analyst identity is a fixed local label, with no login, role-based access control, or external audit sink. Keep the API bound to loopback.
+The API requires authentication and server-side roles. `SOC Manager` and administrator users can add SOC Analyst and Read-only Viewer accounts from the Analyst Management view. Audit actions record the authenticated username. Keep the API bound to loopback; sessions use HttpOnly/SameSite cookies and CSRF tokens, but production HTTPS/proxy settings have not been verified.

@@ -10,24 +10,29 @@ Status reflects code and checks available in this repository as of 2026-11-01. "
 | Synthetic scenarios | Implemented | Deterministic, labeled benign/SYN/connect/sweep/FIN/NULL/XMAS/low-and-slow scenarios. These do not generate network traffic. |
 | Scan detections | Implemented in part | Explainable horizontal, vertical, connect, low-and-slow, SYN, FIN, NULL, and XMAS heuristics. Threshold and source IP/CIDR allowlist are configurable at process start. No tuning UI, broad correlation, calibrated confidence, or production quality claims. |
 | Event/alert persistence | Implemented | SQLite persistence, duplicate event IDs skipped, bounded one-hour event lookback for detection. |
-| Alert and incident workflow | Partial | Local status/assignment/note endpoints, incident lifecycle, and audit records exist. No authenticated actor, analyst accounts, teams, or RBAC. |
-| SOC dashboard | Partial | API-backed overview, events, alerts, incidents, ingestion, loading/error handling, periodic refresh, and CSV export. No login, responsive-accessibility audit, full page suite, or browser-driven E2E verification. |
-| Summary reporting | Partial | Database-backed JSON and CSV summary reports. No PDF, date-range/report permissions, charts, or full analyst-note report. |
-| Authentication / RBAC | Not implemented | API is unauthenticated. Keep backend bound to loopback; CORS is not an authorization boundary. |
+| Alert and incident workflow | Partial | Local status/assignment/note endpoints, incident lifecycle, analyst assignment validation, and authenticated audit history exist. Teams, investigation comments, and escalation history beyond audit details remain limited. |
+| SOC dashboard | Partial | API-backed overview, events, alerts, incidents, ingestion, authenticated login/logout, account management, role-aware controls, loading/error handling, periodic refresh, and CSV/PDF report access. Core administrator/analyst workflow now has a passing local Playwright E2E test; other pages/roles remain uncovered. |
+| Summary reporting | Partial | Database-backed JSON, CSV, and PDF reports. PDF supports daily/weekly/monthly/all periods, actual DB-backed metrics, ranked tables, severity chart, available investigation notes, inline preview/download, and authenticated access. |
+| Authentication / RBAC | Implemented (prototype) | Scrypt password hashes, one-time CLI bootstrap, opaque server-side sessions, HttpOnly/SameSite cookies, CSRF token and origin checks, 8-hour expiry, session revocation, per-role endpoint authorization, and no public registration. Keep loopback-bound pending production proxy/TLS review. |
+| Analyst accounts | Partial | Admins/managers create SOC Analyst and Read-only Viewer accounts; active analyst assignment is validated. Password reset and richer team management are absent. |
 | Nmap integration | Not implemented | The reference shell commands are not an app-mediated scanner. No target allowlist, job queue, cancellation, or scan verification. |
 | Live capture / Zeek / Suricata sensors | Not implemented | Parsers handle offline files only; packet capture and sensor health are not present. |
-| PCAP processing | Not implemented | No PCAP upload/parser workflow. |
+| PCAP processing | Implemented (offline) | Authenticated bounded PCAP/PCAPNG uploads normalize Ethernet/raw IPv4/IPv6 packet metadata and TCP flags, deduplicate/persist events, and feed the detection engine. Capped at 5 MiB and 20,000 packets. No live capture. |
 | Splunk HEC | Not implemented | Checked-in SPL/dashboard artifacts are reference material only; no event delivery/search verification. |
 | Elasticsearch | Not implemented | Query artifacts are not connected to an indexing/search client. |
-| PDF reports | Not implemented | No PDF library or generation endpoint. |
-| PostgreSQL / migrations | Not implemented | SQLite is the only validated configuration; schema uses `create_all`, not Alembic. |
+| PDF reports | Implemented (local) | ReportLab creates an authenticated database-backed summary PDF with severity chart and ranked tables; pypdf tests validate structure and report content. Requires further role/data-scope controls for multi-tenant production. |
+| PostgreSQL / migrations | Partial | Alembic initial schema migration and `alembic check` passed on PostgreSQL 17 in an isolated Docker container; FastAPI `/health` returned connected against PostgreSQL. SQLite migrations are also tested. Compose/deployment and production hardening remain unimplemented; local SQLite `create_all` is preserved. |
 | Redis / background worker | Not implemented | Work is synchronous in the API process. |
 | Docker / deployment profiles | Not implemented | No Dockerfiles or Compose stack. |
-| CI/CD | Not implemented | No GitHub Actions workflow. |
+| CI/CD | Partial | GitHub Actions workflow runs pinned Python backend tests/Ruff checks, frontend ESLint/typecheck/production build and Playwright Chromium E2E, and Gitleaks on pushes/PRs. The workflow itself has not run on GitHub; dependency review, container build/scanning, and deployment jobs remain absent. |
 | Detection quality / performance evaluation | Not implemented | Synthetic fixture tests are regression checks, not independent accuracy or production-performance measurements. |
 
 ## Recent Verified Increment
 
 The API reads `LAB_DETECTION_THRESHOLD` (3–65536; default 8) and `LAB_DETECTION_SOURCE_ALLOWLIST` (comma-separated IPv4/IPv6 addresses or CIDRs) at startup. Invalid values stop startup with an explicit error. Matching source events continue to be ingested and queryable but are omitted from scan alert generation. Unit and API tests cover the behavior.
+
+API authentication and backend RBAC now protect all data routes except health and sign-in; writes require CSRF validation. Audit entries use the authenticated username. Uploads require a bounded content length, are limited to 5 MiB and 20,000 lines, return at most 100 parse errors, and are limited to 10 requests/minute per client in this single-process deployment. Detection context queries are capped. The limiter is in-memory and must be replaced with a shared store before multiple workers.
+
+PDF reports use persisted network events, alerts, incidents, and audit notes, with selectable periods and a severity chart. Report tests verify a generated PDF's parseability, report text, metric counts, and preview headers. The dashboard provides a weekly PDF link. Offline PCAP upload is bounded, authenticated, and covered by IPv4/IPv6 parser tests plus API persistence/deduplication tests. An initial Alembic migration is tested on SQLite and PostgreSQL 17; a FastAPI database health request also passed against PostgreSQL. Local Playwright verifies sign-in, analyst provisioning, synthetic event persistence/detection, alert investigation, incident assignment/status, audit actor, and PDF download. GitHub Actions now includes those jobs, but no remote workflow run has been observed.
 
 See [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) for phase gates and [TESTING_REPORT.md](./TESTING_REPORT.md) for executed checks.

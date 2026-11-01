@@ -4,17 +4,19 @@ SentinelSOC in this repository is an offline-first analyst workflow prototype. G
 
 ## Start the Application
 
-Follow [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md). Keep the API bound to loopback; there are no user accounts or roles.
+Follow [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md). Create the initial administrator with the CLI command before logging in. Registration is disabled; administrators/managers create accounts.
 
 ## Dashboard Workflow
 
 1. Select **Generate demo events** to create a labeled synthetic SYN-scan dataset. Verify the simulated event and alert counts.
 2. Open **Network events** to search and inspect persisted normalized telemetry. Export the visible rows as CSV.
 3. Open **Security alerts** and choose an alert to inspect its evidence and detection rationale.
-4. Update the alert status or analyst label. The current actor is a fixed local label, not an authenticated user.
+4. Update the alert status or assign an active SOC Analyst account. The authenticated username is recorded in the audit history.
 5. Create an incident from an alert and update its status. A resolution is required before setting the incident to Resolved or Closed.
 6. Use **Incidents** to inspect open work and download a summary CSV.
-7. Open **Log ingestion**, choose the matching source format, select an offline Zeek, Suricata, or supported UFW-style log, and run parsing. The upload is limited to 5 MiB. Duplicate IDs are skipped; malformed records are reported.
+7. Open **Log ingestion**, choose the matching source format, select an offline Zeek, Suricata, supported UFW-style log, or PCAP/PCAPNG file, and run parsing. Uploads are limited to 5 MiB and 20,000 records/packets. PCAP support extracts metadata only from Ethernet or raw IPv4/IPv6 captures; it does not store/replay packet payloads or start live capture. Duplicate event IDs are skipped; malformed records are reported.
+8. Use **Analyst management** (administrator or manager) to create a SOC Analyst or Read-only Viewer account. Passwords must be at least 12 characters.
+9. Select **Weekly PDF** to download a database-backed report. The API also supports `daily`, `weekly`, `monthly`, and `all` periods; append `&download=false` to preview inline in a browser. Reports include persisted metrics, alert severity distribution, top source/destination addresses and ports, rule and incident distributions, and investigation notes when available.
 
 ## Detection Configuration
 
@@ -22,6 +24,6 @@ Set `LAB_DETECTION_THRESHOLD` and/or `LAB_DETECTION_SOURCE_ALLOWLIST` before sta
 
 ## Data and Limitations
 
-The application stores data in `data/soc_lab.db` by default. There is no automatic retention policy. The UI refreshes persisted API data periodically; it is not a live sensor stream. Confidence and severity are heuristic. Results from synthetic samples are not a measure of real-world detection accuracy.
+The application stores data in `data/soc_lab.db` by default. There is no automatic retention policy. The UI refreshes persisted API data periodically; it is not a live sensor stream. Confidence and severity are heuristic. Results from synthetic samples are not a measure of real-world detection accuracy. PDF reports describe these limitations and are not an independent accuracy assessment.
 
-Nmap execution, live capture, PCAP investigation, analyst login/RBAC, Splunk/Elasticsearch delivery, PDFs, and production deployment are unavailable; do not rely on controls or buttons for those features.
+Nmap execution, live capture, PCAP investigation, Splunk/Elasticsearch delivery, and production deployment are unavailable; do not rely on controls or buttons for those features.

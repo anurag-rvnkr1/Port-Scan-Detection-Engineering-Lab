@@ -7,14 +7,18 @@ An offline-first network telemetry normalization and port-scan detection lab. Th
 - Generate labeled synthetic TCP scan, low-and-slow, or benign-connection events without sending network traffic.
 - Normalize IPv4/IPv6 events into a versioned schema and retain their raw input.
 - Ingest offline Zeek `conn.log`, Suricata EVE JSON Lines, and supported UFW syslog records. Bad lines are reported without discarding valid neighboring records.
+- Parse authenticated, size- and packet-count-bounded PCAP/PCAPNG uploads into normalized IPv4/IPv6 packet metadata; captures are not replayed and payloads are not stored.
 - Store events and explainable alerts in local SQLite; repeated ingestion of the same source file is deduplicated.
 - Correlate same-source events across upload batches using a bounded one-hour lookback and merge overlapping alert evidence while retaining analyst status.
 - Detect multi-event horizontal port scans, vertical port sweeps, successful TCP connect patterns, low-and-slow multi-port activity, SYN patterns when TCP flags exist, and FIN/NULL/XMAS patterns when the source reports flags.
 - View actual stored metrics, events, and alerts in the dashboard; inspect alert evidence and export visible rows to CSV.
-- Investigate alerts with persisted event evidence, update alert status/assignment, create incidents, record incident status changes, and export a database-backed SOC summary report.
+- Require authenticated accounts, secure server-side sessions, CSRF protection, and backend-enforced role authorization for API access.
+- Manage analyst/viewer accounts and assign alerts/incidents to active analysts; audit entries identify the authenticated account.
+- Investigate alerts with persisted event evidence, update alert status/assignment, create incidents, record incident status changes, and export database-backed SOC summary reports.
+- Generate authenticated database-backed PDF reports with severity charts, ranked event/alert tables, analyst notes, and selectable reporting periods.
 - Explore the local REST API through OpenAPI at `/docs`.
 
-Synthetic events are visibly labeled and never sent to the network. The application does not capture live traffic. Optional SIEM delivery, Nmap execution, report PDFs, authentication, and production deployment are not implemented.
+Synthetic events are visibly labeled and never sent to the network. The application does not capture live traffic. Optional SIEM delivery, Nmap execution, live sensors, and production deployment are not implemented.
 
 ## Architecture
 
@@ -51,6 +55,12 @@ Start the API in terminal 1:
 ./run_lab.sh
 ```
 
+Before signing in for the first time, create the initial administrator in another terminal. No default credentials are shipped:
+
+```bash
+.venv/bin/python -m backend.app.admin create-admin
+```
+
 Start the frontend in terminal 2:
 
 ```bash
@@ -59,7 +69,7 @@ npm run dev
 
 Open <http://localhost:3000>. Use **Generate demo events** to create explicitly simulated events. The dashboard refreshes every 15 seconds. Use **Log ingestion** to load an offline file. The API health check is at <http://localhost:8000/health>; interactive API docs are at <http://localhost:8000/docs>.
 
-The API binds to loopback by default. Change `LAB_HOST`, `LAB_PORT`, `LAB_DATABASE_URL`, and `LAB_CORS_ORIGINS` only for a deliberate local deployment. The local demo API has no authentication; do not bind it to a shared or public interface.
+The API binds to loopback by default and requires an administrator-created account. Keep it loopback-bound unless deployed behind a reviewed HTTPS reverse proxy with `LAB_COOKIE_SECURE=true` and explicit CORS origins.
 The development server uses its own `.next-dev` output so a production build does not overwrite its active cache.
 
 ### Detection tuning
@@ -79,6 +89,7 @@ The threshold must be between 3 and 65536. Allowlisted source events are still i
 ```bash
 .venv/bin/python -m pytest -q
 npm run build
+npm run test:e2e
 bash -n install.sh run_lab.sh nmap_commands.sh
 ```
 
@@ -108,13 +119,17 @@ Example with the included fixture: select **Log ingestion**, choose **Zeek conn.
 - `GET /api/alerts?limit=100&offset=0`: paginated persisted alerts.
 - `POST /api/demo/generate?scenario=syn&count=40`: generate local synthetic events (`syn`, `connect`, `sweep`, `fin`, `null`, `xmas`, `low_slow`, or `benign`).
 - `POST /api/ingest/upload?format=zeek`: multipart upload; `format` may be `zeek`, `suricata`, or `firewall`.
+- `POST /api/ingest/pcap`: multipart offline capture parsing (5 MiB/20,000 packet limit; Ethernet or raw IPv4/IPv6 only).
 - `GET/PATCH /api/alerts/{alert_id}`: retrieve evidence and update alert status, severity, assignment, and notes.
 - `GET/POST /api/incidents` and `GET/PATCH /api/incidents/{incident_id}`: create incidents from alerts and track their status with audit history.
-- `GET /api/reports/summary` and `GET /api/reports/summary.csv`: generate persisted-record summary reports.
+- `GET /api/reports/summary` and `/api/reports/summary.csv`: generate persisted-record summary reports.
+- `GET /api/reports/summary.pdf?period=weekly&download=true`: generate an authenticated PDF report (`daily`, `weekly`, `monthly`, or `all`; `download=false` previews inline).
+
+Database migrations are managed with Alembic. Apply the initial migration with `.venv/bin/alembic upgrade head`; local SQLite also retains its automatic table initialization. The initial migration was tested on SQLite and PostgreSQL 17, and API database health was verified against the temporary PostgreSQL instance; production deployment is still pending.
 
 ## Status and limitations
 
-This is an offline-first detection engineering prototype, not a production SOC platform. Features verified in this checkout and the still-pending production work are tracked in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md). The API has no authentication or RBAC; keep it loopback-bound. Nmap, live packet capture, SIEM delivery, PDF reports, Docker deployment, CI, and browser-driven end-to-end testing are not implemented or verified. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) and [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) before deployment.
+This is an offline-first detection engineering prototype, not a production SOC platform. Features verified in this checkout and the still-pending production work are tracked in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md). PostgreSQL migrations are verified locally and a CI workflow is defined, but remote workflow execution and production deployment are pending. Nmap, live packet capture, SIEM delivery, Docker deployment, and browser-driven end-to-end testing are not implemented or verified. The API requires authentication but should remain loopback-bound until deployment controls are validated. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) and [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) before deployment.
 
 ## Repository Map
 
@@ -133,8 +148,8 @@ This is an offline-first detection engineering prototype, not a production SOC p
 
 - No Splunk or Elasticsearch client is implemented; the existing query/dashboard files remain reference examples and are not verified against this API's schema.
 - No controlled Nmap runner, sensor process, live packet capture, distributed or multi-technique correlation, or operator-facing detection UI. Source-IP/CIDR exclusions and threshold are startup environment settings only. The TCP Connect and low-and-slow heuristics remain simple threshold-based rules.
-- No analyst authentication, role-based authorization, API rate limiting, PDF reports, or detection evaluation metrics. The alert/incident workflow and JSON/CSV summary report exist only for this single-user, loopback-bound demo.
-- No Docker deployment or CI workflow yet. PostgreSQL configuration is not validated.
+- Authentication, backend role checks, audit identity, bounded ingestion, PDF reports, and a GitHub Actions workflow are implemented and covered by local checks; full teams, E2E tests, remote CI execution, and production security validation remain pending.
+- PostgreSQL migrations are tested on SQLite and PostgreSQL 17; no full Docker Compose application deployment is implemented. Redis/background jobs and container scanning are also pending.
 - Dashboard charts summarize the latest 500 records loaded by the UI. The API summary counts stored events, but filtering, sorting, and server-side time-window queries remain limited.
 - Synthetic fixture tests validate implemented behavior, not field performance on production traffic.
 

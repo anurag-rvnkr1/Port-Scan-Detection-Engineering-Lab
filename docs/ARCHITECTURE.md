@@ -14,9 +14,10 @@ flowchart LR
   Schema --> Persistence[(SQLAlchemy / SQLite)]
   Detection --> Persistence
   API --> Persistence
+  Persistence --> Reports[ReportLab PDF / CSV]
 ```
 
-The application is a synchronous, local prototype. SQLite tables are created with SQLAlchemy `create_all`; no Alembic migrations or PostgreSQL validation are present.
+The application is a synchronous prototype. SQLite local development continues to create missing tables with SQLAlchemy `create_all`; Alembic migration support is provided for managed deployments. PostgreSQL URLs are normalized to the psycopg 3 driver. The initial migration and FastAPI health/database connectivity were verified against an isolated PostgreSQL 17 container; deployment orchestration remains pending. Authenticated report requests aggregate persisted records and generate PDFs in the API process.
 
 ## Event Flow
 
@@ -33,9 +34,15 @@ The application is a synchronous, local prototype. SQLite tables are created wit
 | `network_events` | Canonical event columns plus the full normalized event payload. |
 | `security_alerts` | Alert status, severity, source, and structured detection/evidence payload. |
 | `incidents` | Incident title, description, status, assignment, alert IDs, and resolution. |
-| `audit_log` | Local workflow actions with timestamp and structured details; actor is currently a fixed label. |
+| `audit_log` | Local workflow actions with timestamp, authenticated actor, and structured details. |
+| `users` | Local account identifier, scrypt password hash, role, active state, and creation timestamp. |
+| `auth_sessions` | Hashes of opaque session and CSRF tokens, owning user, and expiry. |
 
-Foreign-key relationships, normalized user/team/role entities, migration history, retention jobs, and multi-tenant isolation are not implemented.
+The initial Alembic revision creates these tables and indexes. Foreign-key relationships, normalized team/permission entities, retention jobs, and multi-tenant isolation are not implemented.
+
+## Reports
+
+The authenticated PDF endpoint generates daily, weekly, monthly, or all-time reports from persisted rows. SQL aggregates feed the executive metrics, top-address/port tables, rule/incident distributions, and severity chart. Analyst notes are selected from audit entries. The report states that heuristic/synthetic data is not a real-world efficacy assessment. Report generation runs synchronously and is rate-limited per process; this must be moved to a shared queue/cache for multi-worker use.
 
 ## Detection Controls
 
@@ -45,4 +52,4 @@ Implemented rules and limitations are tracked in [FEATURE_STATUS.md](./FEATURE_S
 
 ## Target Architecture Not Yet Present
 
-Redis/Celery, PostgreSQL, Alembic, WebSockets/SSE, live sensors, Nmap jobs, PCAP parsing, SIEM clients, authentication/RBAC, PDF generation, Docker, and CI are future work. The platform should remain offline-capable without external services while these are added and verified.
+Redis/Celery, PostgreSQL, Alembic, WebSockets/SSE, live sensors, Nmap jobs, PCAP parsing, SIEM clients, Docker, and CI are future work. The platform should remain offline-capable without external services while these are added and verified.

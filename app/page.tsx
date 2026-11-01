@@ -11,7 +11,9 @@ import {
   Clock3,
   FileUp,
   Filter,
+  FileText,
   LoaderCircle,
+  LogOut,
   Network,
   Radar,
   RefreshCw,
@@ -20,6 +22,7 @@ import {
   ShieldCheck,
   Siren,
   Upload,
+  UsersRound,
   X,
 } from 'lucide-react'
 import {
@@ -33,7 +36,7 @@ import {
 } from 'recharts'
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from 'react'
 
-type View = 'overview' | 'events' | 'alerts' | 'incidents' | 'ingestion'
+type View = 'overview' | 'events' | 'alerts' | 'incidents' | 'ingestion' | 'analysts'
 type NetworkEvent = {
   event_id: string
   timestamp: string
@@ -84,6 +87,7 @@ type Incident = {
   alert_ids: string[]
   updated_at: string
 }
+type Analyst = { username: string; role: string }
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000').replace(/\/$/, '')
 const NAV_ITEMS: { id: View; label: string; icon: typeof Radar }[] = [
@@ -92,6 +96,7 @@ const NAV_ITEMS: { id: View; label: string; icon: typeof Radar }[] = [
   { id: 'alerts', label: 'Security alerts', icon: ShieldAlert },
   { id: 'incidents', label: 'Incidents', icon: Siren },
   { id: 'ingestion', label: 'Log ingestion', icon: FileUp },
+  { id: 'analysts', label: 'Analyst management', icon: UsersRound },
 ]
 
 function csvCell(value: unknown): string {
@@ -123,7 +128,17 @@ export default function Home() {
   const [events, setEvents] = useState<NetworkEvent[]>([])
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [incidents, setIncidents] = useState<Incident[]>([])
+  const [analysts, setAnalysts] = useState<Analyst[]>([])
+  const [newUsername, setNewUsername] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newRole, setNewRole] = useState<'soc_analyst' | 'read_only_viewer'>('soc_analyst')
   const [loading, setLoading] = useState(true)
+  const [authReady, setAuthReady] = useState(false)
+  const [identity, setIdentity] = useState<{ username: string; role: string } | null>(null)
+  const [csrfToken, setCsrfToken] = useState('')
+  const [loginUsername, setLoginUsername] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [authMessage, setAuthMessage] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
@@ -137,15 +152,28 @@ export default function Home() {
   const [ingestMessage, setIngestMessage] = useState('')
   const [busyAction, setBusyAction] = useState(false)
 
+  const apiFetch = useCallback(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers)
+    if (init.method && !['GET', 'HEAD', 'OPTIONS'].includes(init.method.toUpperCase()) && csrfToken) {
+      headers.set('X-CSRF-Token', csrfToken)
+    }
+    const response = await fetch(input, { ...init, headers, credentials: 'include' })
+    if (response.status === 401) {
+      setIdentity(null)
+      setCsrfToken('')
+    }
+    return response
+  }, [csrfToken])
+
   const refresh = useCallback(async (quiet = false) => {
     if (quiet) setRefreshing(true)
     else setLoading(true)
     try {
       const [summaryResponse, eventResponse, alertResponse, incidentResponse] = await Promise.all([
-        fetch(`${API_BASE}/api/dashboard/summary`, { cache: 'no-store' }),
-        fetch(`${API_BASE}/api/events?limit=500`, { cache: 'no-store' }),
-        fetch(`${API_BASE}/api/alerts?limit=500`, { cache: 'no-store' }),
-        fetch(`${API_BASE}/api/incidents?limit=100`, { cache: 'no-store' }),
+        apiFetch(`${API_BASE}/api/dashboard/summary`, { cache: 'no-store' }),
+        apiFetch(`${API_BASE}/api/events?limit=500`, { cache: 'no-store' }),
+        apiFetch(`${API_BASE}/api/alerts?limit=500`, { cache: 'no-store' }),
+        apiFetch(`${API_BASE}/api/incidents?limit=100`, { cache: 'no-store' }),
       ])
       if (![summaryResponse, eventResponse, alertResponse, incidentResponse].every((response) => response.ok)) {
         throw new Error('The local API returned an unsuccessful response.')
@@ -167,22 +195,127 @@ export default function Home() {
       setLoading(false)
       setRefreshing(false)
     }
+  }, [apiFetch])
+
+  useEffect(() => {
+    let active = true
+    async function restoreSession() {
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/me`, { credentials: 'include', cache: 'no-store' })
+        if (!response.ok) return
+        const [current, csrfResponse] = await Promise.all([
+          response.json(),
+          fetch(`${API_BASE}/api/auth/csrf`, { credentials: 'include', cache: 'no-store' }),
+        ])
+        if (!csrfResponse.ok) throw new Error('Unable to initialize the secure session.')
+        const csrf = await csrfResponse.json()
+        if (active) {
+          setIdentity(current)
+          setCsrfToken(csrf.csrf_token)
+        }
+      } catch (reason) {
+        if (active) setAuthMessage(reason instanceof Error ? reason.message : 'Unable to restore the session.')
+      } finally {
+        if (active) setAuthReady(true)
+      }
+    }
+    void restoreSession()
+    return () => {
+      active = false
+    }
   }, [])
 
   useEffect(() => {
+    if (!identity) return
     const initialRefresh = window.setTimeout(() => void refresh(), 0)
     const timer = window.setInterval(() => void refresh(true), 15000)
     return () => {
       window.clearTimeout(initialRefresh)
       window.clearInterval(timer)
     }
-  }, [refresh])
+  }, [identity, refresh])
+
+  useEffect(() => {
+    if (!identity) return
+    const timer = window.setTimeout(() => {
+      void apiFetch(`${API_BASE}/api/analysts`, { cache: 'no-store' }).then(async (response) => {
+        if (!response.ok) throw new Error('Unable to load analyst accounts.')
+        const payload = await response.json()
+        setAnalysts(payload.items)
+      }).catch((reason) => setAuthMessage(reason instanceof Error ? reason.message : 'Unable to load analyst accounts.'))
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [identity, apiFetch])
+
+  async function login(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBusyAction(true)
+    setAuthMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Login failed.')
+      setIdentity(result.user)
+      setCsrfToken(result.csrf_token)
+      setLoginPassword('')
+    } catch (reason) {
+      setAuthMessage(reason instanceof Error ? reason.message : 'Login failed.')
+    } finally {
+      setBusyAction(false)
+      setAuthReady(true)
+    }
+  }
+
+  async function logout() {
+    try {
+      const response = await apiFetch(`${API_BASE}/api/auth/logout`, { method: 'POST' })
+      if (!response.ok) throw new Error('Logout failed.')
+      setIdentity(null)
+      setCsrfToken('')
+      setSummary(null)
+      setEvents([])
+      setAlerts([])
+      setIncidents([])
+    } catch (reason) {
+      setAuthMessage(reason instanceof Error ? reason.message : 'Logout failed.')
+    }
+  }
+
+  async function addAnalyst(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBusyAction(true)
+    setIngestMessage('')
+    try {
+      const response = await apiFetch(`${API_BASE}/api/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Account creation failed.')
+      setNewUsername('')
+      setNewPassword('')
+      const list = await apiFetch(`${API_BASE}/api/analysts`, { cache: 'no-store' })
+      if (!list.ok) throw new Error('Account was created, but refreshing analyst accounts failed.')
+      setAnalysts((await list.json()).items)
+      setIngestMessage(`Created ${result.role.replaceAll('_', ' ')} account ${result.username}.`)
+    } catch (reason) {
+      setIngestMessage(reason instanceof Error ? reason.message : 'Account creation failed.')
+    } finally {
+      setBusyAction(false)
+    }
+  }
 
   async function generateDemo() {
     setBusyAction(true)
     setIngestMessage('')
     try {
-      const response = await fetch(`${API_BASE}/api/demo/generate?scenario=syn&count=40`, { method: 'POST' })
+      const response = await apiFetch(`${API_BASE}/api/demo/generate?scenario=syn&count=40`, { method: 'POST' })
       const result = await response.json()
       if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Event generation failed.')
       setIngestMessage(`Generated ${result.accepted} simulated events and ${result.alerts.length} alerts.`)
@@ -205,10 +338,14 @@ export default function Home() {
     const formData = new FormData()
     formData.append('file', ingestFile)
     try {
-      const response = await fetch(`${API_BASE}/api/ingest/upload?format=${ingestFormat}`, { method: 'POST', body: formData })
+      const endpoint = ingestFormat === 'pcap' ? '/api/ingest/pcap' : `/api/ingest/upload?format=${ingestFormat}`
+      const response = await apiFetch(`${API_BASE}${endpoint}`, { method: 'POST', body: formData })
       const result = await response.json()
       if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Log ingestion failed validation.')
-      setIngestMessage(`Parsed ${result.parsed} records; stored ${result.accepted}, skipped ${result.duplicates} duplicates, and found ${result.parse_errors.length} malformed records.`)
+      const issueSummary = ingestFormat === 'pcap'
+        ? `${result.malformed_packets} malformed packets`
+        : `${result.parse_error_count} malformed records`
+      setIngestMessage(`Parsed ${result.parsed} records; stored ${result.accepted}, skipped ${result.duplicates} duplicates, and found ${issueSummary}.`)
       await refresh(true)
     } catch (reason) {
       setIngestMessage(reason instanceof Error ? reason.message : 'Log ingestion failed.')
@@ -222,7 +359,7 @@ export default function Home() {
     setSelectedEvidence([])
     setAssignedAnalyst(alert.assigned_to ?? '')
     try {
-      const response = await fetch(`${API_BASE}/api/alerts/${alert.alert_id}`, { cache: 'no-store' })
+      const response = await apiFetch(`${API_BASE}/api/alerts/${alert.alert_id}`, { cache: 'no-store' })
       if (!response.ok) throw new Error('Unable to load alert evidence.')
       const result = await response.json()
       setSelectedEvidence(result.evidence)
@@ -234,10 +371,10 @@ export default function Home() {
 
   async function updateAlertStatus(status: string) {
     if (!selectedAlert) return
-    const response = await fetch(`${API_BASE}/api/alerts/${selectedAlert.alert_id}`, {
+    const response = await apiFetch(`${API_BASE}/api/alerts/${selectedAlert.alert_id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, ...(assignedAnalyst ? { assigned_to: assignedAnalyst } : {}) }),
+      body: JSON.stringify({ status, assigned_to: assignedAnalyst || null }),
     })
     if (!response.ok) throw new Error('Alert update failed.')
     await refresh(true)
@@ -246,7 +383,7 @@ export default function Home() {
 
   async function createIncident() {
     if (!selectedAlert) return
-    const response = await fetch(`${API_BASE}/api/incidents`, {
+    const response = await apiFetch(`${API_BASE}/api/incidents`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -264,12 +401,22 @@ export default function Home() {
     if (status === 'Resolved' && !resolutionText.trim()) {
       throw new Error('Add a resolution note before marking the incident resolved.')
     }
-    const response = await fetch(`${API_BASE}/api/incidents/${incidentId}`, {
+    const response = await apiFetch(`${API_BASE}/api/incidents/${incidentId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, ...(status === 'Resolved' ? { resolution: resolutionText.trim() } : {}) }),
     })
     if (!response.ok) throw new Error('Incident update failed.')
+    await refresh(true)
+  }
+
+  async function updateIncidentAssignee(incidentId: string, assigned_to: string) {
+    const response = await apiFetch(`${API_BASE}/api/incidents/${incidentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assigned_to: assigned_to || null }),
+    })
+    if (!response.ok) throw new Error((await response.json()).detail ?? 'Incident assignment failed.')
     await refresh(true)
   }
 
@@ -304,17 +451,40 @@ export default function Home() {
   }
 
   const pageTitle = NAV_ITEMS.find((item) => item.id === view)?.label ?? 'Overview'
+  const canWrite = identity?.role !== 'read_only_viewer'
+  const canManageTeam = ['super_admin', 'security_admin', 'soc_manager'].includes(identity?.role ?? '')
+
+  if (!authReady) {
+    return <main className="auth-screen"><div className="loading-state"><LoaderCircle className="spin" size={22} /> Checking secure session</div></main>
+  }
+
+  if (!identity) {
+    return (
+      <main className="auth-screen">
+        <form className="auth-card" onSubmit={(event) => void login(event)}>
+          <div className="brand-lockup"><span className="brand-mark"><Radar size={22} /></span><span><strong>SENTINELSOC</strong><small>NETWORK DEFENSE PLATFORM</small></span></div>
+          <h1>Analyst sign in</h1>
+          <p>Sign in with an account created by your SOC administrator.</p>
+          {authMessage && <div className="notice notice-error" role="alert">{authMessage}</div>}
+          <label className="form-label">Username<input autoComplete="username" required maxLength={64} value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} /></label>
+          <label className="form-label">Password<input type="password" autoComplete="current-password" required value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} /></label>
+          <button className="button button-primary" type="submit" disabled={busyAction}>{busyAction ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} Sign in</button>
+          <small className="auth-help">Initial administrator setup: run <code>python -m backend.app.admin create-admin</code> in a terminal.</small>
+        </form>
+      </main>
+    )
+  }
 
   return (
     <main className="soc-shell">
       <aside className="sidebar">
         <a href="#overview" className="brand-lockup" onClick={() => setView('overview')}>
           <span className="brand-mark"><Radar size={22} strokeWidth={1.8} /></span>
-          <span><strong>FIELDNOTE</strong><small>NETWORK DEFENSE LAB</small></span>
+          <span><strong>SENTINELSOC</strong><small>NETWORK THREAT OPERATIONS</small></span>
         </a>
         <div className="workspace-label">WORKSPACE <span>LOCAL</span></div>
         <nav className="primary-nav" aria-label="Primary navigation">
-          {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+          {NAV_ITEMS.filter((item) => item.id !== 'analysts' || canManageTeam).map(({ id, label, icon: Icon }) => (
             <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => setView(id)}>
               <Icon size={17} strokeWidth={1.8} /><span>{label}</span>
               {id === 'alerts' && alerts.length > 0 && <span className="nav-count">{alerts.length}</span>}
@@ -336,6 +506,8 @@ export default function Home() {
           <div className="crumb"><span>OPERATIONS</span><ChevronRight size={14} /><strong>{pageTitle.toUpperCase()}</strong></div>
           <div className="topbar-actions">
             <span className="live-state"><span /> LOCAL API</span>
+            <span className="user-badge">{identity.username} · {identity.role.replaceAll('_', ' ')}</span>
+            <button className="icon-button" aria-label="Sign out" title="Sign out" onClick={() => void logout()}><LogOut size={16} /></button>
             <button className="icon-button" aria-label="Refresh data" title="Refresh data" onClick={() => void refresh(true)} disabled={refreshing}>
               <RefreshCw size={16} className={refreshing ? 'spin' : ''} />
             </button>
@@ -347,13 +519,14 @@ export default function Home() {
             <div>
               <div className="eyebrow"><span className="eyebrow-line" /> SECURITY OPERATIONS <span className="demo-chip">SIMULATED / OFFLINE DATA</span></div>
               <h1>{view === 'overview' ? 'Threat activity' : pageTitle}</h1>
-              <p>{view === 'overview' ? 'Network telemetry, normalized and analyzed locally.' : view === 'events' ? 'Normalized events stored in the local detection database.' : view === 'alerts' ? 'Explainable detections generated from ingested event evidence.' : view === 'incidents' ? 'Track local analyst response and resolution history.' : 'Parse offline Zeek, Suricata, and supported UFW syslog files.'}</p>
+              <p>{view === 'overview' ? 'Network telemetry, normalized and analyzed locally.' : view === 'events' ? 'Normalized events stored in the local detection database.' : view === 'alerts' ? 'Explainable detections generated from ingested event evidence.' : view === 'incidents' ? 'Track local analyst response and resolution history.' : view === 'analysts' ? 'Manage local analyst accounts and assignments.' : 'Parse offline Zeek, Suricata, and supported UFW syslog files.'}</p>
             </div>
             <div className="heading-actions">
               <span className="updated-label"><Clock3 size={14} /> AUTO-REFRESH 15S</span>
-              <button className="button button-primary" onClick={view === 'ingestion' ? () => setIngestMessage('Choose a source format and file below.') : generateDemo} disabled={busyAction}>
+              <a className="button button-secondary" href={`${API_BASE}/api/reports/summary.pdf?period=weekly`}><FileText size={16} /> Weekly PDF</a>
+              {canWrite && <button className="button button-primary" onClick={view === 'ingestion' ? () => setIngestMessage('Choose a source format and file below.') : generateDemo} disabled={busyAction}>
                 <Activity size={16} /> Generate demo events
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -426,10 +599,21 @@ export default function Home() {
 
           {view === 'incidents' && <section className="panel data-panel">
             <PanelHeading title="Incident queue" eyebrow={`${incidents.length} PERSISTED INCIDENTS`} action={<a className="button button-subtle" href={`${API_BASE}/api/reports/summary.csv`}><ArrowDownToLine size={15} /> Export SOC summary</a>} />
-            <label className="form-label">Resolution note (required to resolve)<input value={resolutionText} maxLength={4000} onChange={(event) => setResolutionText(event.target.value)} placeholder="Document investigation findings and disposition" /></label>
-            <div className="table-scroll"><table><thead><tr><th>INCIDENT</th><th>STATUS</th><th>ASSIGNEE</th><th>LINKED ALERTS</th><th>UPDATED</th><th>UPDATE STATUS</th></tr></thead><tbody>
-              {incidents.map((incident) => <tr key={incident.incident_id}><td><strong className="table-primary">{incident.title}</strong><small className="table-secondary mono">{incident.incident_id}</small></td><td><span className="status-chip">{incident.status}</span></td><td>{incident.assigned_to ?? 'Unassigned'}</td><td>{incident.alert_ids.length}</td><td className="time-cell">{formatTime(incident.updated_at)}</td><td><select aria-label={`Update status for ${incident.title}`} value={incident.status} onChange={(event) => void updateIncidentStatus(incident.incident_id, event.target.value).catch((reason) => setIngestMessage(String(reason)))}>{['New', 'Investigating', 'Escalated', 'Resolved', 'Closed'].map((status) => <option key={status}>{status}</option>)}</select></td></tr>)}
+            {canWrite && <label className="form-label">Resolution note (required to resolve)<input value={resolutionText} maxLength={4000} onChange={(event) => setResolutionText(event.target.value)} placeholder="Document investigation findings and disposition" /></label>}
+            <div className="table-scroll"><table><thead><tr><th>INCIDENT</th><th>STATUS</th><th>ASSIGNED ANALYST</th><th>LINKED ALERTS</th><th>UPDATED</th><th>UPDATE STATUS</th></tr></thead><tbody>
+              {incidents.map((incident) => <tr key={incident.incident_id}><td><strong className="table-primary">{incident.title}</strong><small className="table-secondary mono">{incident.incident_id}</small></td><td><span className="status-chip">{incident.status}</span></td><td><select disabled={!canWrite} aria-label={`Assign ${incident.title}`} value={incident.assigned_to ?? ''} onChange={(event) => void updateIncidentAssignee(incident.incident_id, event.target.value).catch((reason) => setIngestMessage(String(reason)))}><option value="">Unassigned</option>{analysts.map((analyst) => <option key={analyst.username} value={analyst.username}>{analyst.username}</option>)}</select></td><td>{incident.alert_ids.length}</td><td className="time-cell">{formatTime(incident.updated_at)}</td><td><select disabled={!canWrite} aria-label={`Update status for ${incident.title}`} value={incident.status} onChange={(event) => void updateIncidentStatus(incident.incident_id, event.target.value).catch((reason) => setIngestMessage(String(reason)))}>{['New', 'Investigating', 'Escalated', 'Resolved', 'Closed'].map((status) => <option key={status}>{status}</option>)}</select></td></tr>)}
             </tbody></table>{incidents.length === 0 && <EmptyState title="No incidents" detail="Create an incident from an alert after reviewing its evidence." />}</div>
+          </section>}
+
+          {view === 'analysts' && <section className="panel data-panel">
+            <PanelHeading title="SOC team accounts" eyebrow={`${analysts.length} ACTIVE ASSIGNEES`} />
+            {canManageTeam && <form className="ingestion-form" onSubmit={(event) => void addAnalyst(event)}>
+              <label className="form-label">Username<input required pattern="[A-Za-z0-9_-]+" maxLength={64} value={newUsername} onChange={(event) => setNewUsername(event.target.value)} /></label>
+              <label className="form-label">Temporary password<input required type="password" minLength={12} maxLength={1024} autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+              <label className="form-label">Role<select value={newRole} onChange={(event) => setNewRole(event.target.value as 'soc_analyst' | 'read_only_viewer')}><option value="soc_analyst">SOC Analyst</option><option value="read_only_viewer">Read-only Viewer</option></select></label>
+              <button className="button button-primary" type="submit" disabled={busyAction || !canManageTeam}>{busyAction ? <LoaderCircle className="spin" size={16} /> : <UsersRound size={16} />} Create account</button>
+            </form>}
+            <div className="table-scroll"><table><thead><tr><th>USERNAME</th><th>ROLE</th></tr></thead><tbody>{analysts.map((analyst) => <tr key={analyst.username}><td className="mono">{analyst.username}</td><td>{analyst.role.replaceAll('_', ' ')}</td></tr>)}</tbody></table>{analysts.length === 0 && <EmptyState title="No active analysts" detail="Create an SOC analyst account to enable assignment." />}</div>
           </section>}
 
           {view === 'ingestion' && <section className="ingestion-layout">
@@ -437,19 +621,19 @@ export default function Home() {
               <PanelHeading title="Offline log ingestion" eyebrow="LOCAL FILE PROCESSING" />
               <p className="ingestion-intro">Upload an existing text log to normalize records and run the local detection rules. Files are limited to 5 MiB. No live network capture is performed.</p>
               <form onSubmit={uploadLog} className="ingestion-form">
-                <label className="form-label">Sensor format<select value={ingestFormat} onChange={(event) => setIngestFormat(event.target.value)}><option value="zeek">Zeek conn.log</option><option value="suricata">Suricata eve.json</option><option value="firewall">UFW syslog</option></select></label>
-                <label className="file-drop"><Upload size={23} /><strong>{ingestFile?.name ?? 'Choose a log file'}</strong><span>UTF-8 text · up to 5 MiB</span><input type="file" accept=".log,.json,.txt" onChange={(event: ChangeEvent<HTMLInputElement>) => setIngestFile(event.target.files?.[0] ?? null)} /></label>
-                <button className="button button-primary" type="submit" disabled={busyAction || !ingestFile}>{busyAction ? <LoaderCircle size={16} className="spin" /> : <FileUp size={16} />} Parse and ingest</button>
+                <label className="form-label">Sensor format<select value={ingestFormat} onChange={(event) => { setIngestFormat(event.target.value); setIngestFile(null) }}><option value="zeek">Zeek conn.log</option><option value="suricata">Suricata eve.json</option><option value="firewall">UFW syslog</option><option value="pcap">Offline PCAP / PCAPNG</option></select></label>
+                <label className="file-drop"><Upload size={23} /><strong>{ingestFile?.name ?? 'Choose a log file'}</strong><span>{ingestFormat === 'pcap' ? 'Ethernet/raw IPv4/IPv6 capture · up to 5 MiB' : 'UTF-8 text · up to 5 MiB'}</span><input type="file" accept={ingestFormat === 'pcap' ? '.pcap,.pcapng,.cap' : '.log,.json,.txt'} onChange={(event: ChangeEvent<HTMLInputElement>) => setIngestFile(event.target.files?.[0] ?? null)} /></label>
+                <button className="button button-primary" type="submit" disabled={!canWrite || busyAction || !ingestFile}>{busyAction ? <LoaderCircle size={16} className="spin" /> : <FileUp size={16} />} Parse and ingest</button>
               </form>
             </div>
-            <div className="panel ingestion-info"><div className="info-icon"><ShieldCheck size={20} /></div><h2>Supported sources</h2><ul><li><strong>Zeek</strong><span>TSV conn.log with #fields header</span></li><li><strong>Suricata</strong><span>JSON Lines EVE records</span></li><li><strong>Firewall</strong><span>UFW syslog with SRC/DST metadata</span></li></ul><div className="info-warning"><AlertTriangle size={15} /> Malformed records are reported; valid records in the same file can still be ingested.</div></div>
+            <div className="panel ingestion-info"><div className="info-icon"><ShieldCheck size={20} /></div><h2>Supported sources</h2><ul><li><strong>Zeek</strong><span>TSV conn.log with #fields header</span></li><li><strong>Suricata</strong><span>JSON Lines EVE records</span></li><li><strong>Firewall</strong><span>UFW syslog with SRC/DST metadata</span></li><li><strong>PCAP</strong><span>Offline Ethernet/raw IPv4 and IPv6 captures</span></li></ul><div className="info-warning"><AlertTriangle size={15} /> Offline capture parsing only; 5 MiB and 20,000 packet limit. Malformed records are reported; valid records in the same file can still be ingested.</div></div>
           </section>}
 
           {summary && <footer className="page-footer"><span><span className="footer-dot" /> LOCAL DATA STORE</span><span>{summary.data_mode} · external SIEM connections are not configured</span></footer>}
         </div>
       </section>
 
-      {selectedAlert && <div className="drawer-backdrop" onClick={() => setSelectedAlert(null)}><aside className="alert-drawer" onClick={(event) => event.stopPropagation()}><div className="drawer-heading"><div><span className="eyebrow">ALERT INVESTIGATION</span><h2>{selectedAlert.rule_name}</h2></div><button className="icon-button" aria-label="Close alert details" onClick={() => setSelectedAlert(null)}><X size={17} /></button></div><span className={severityClass(selectedAlert.severity)}>{selectedAlert.severity}</span><dl className="alert-details"><Detail label="Alert ID" value={selectedAlert.alert_id} mono /><Detail label="Rule ID" value={selectedAlert.rule_id} mono /><Detail label="Source" value={selectedAlert.source_ip} mono /><Detail label="Destination" value={selectedAlert.destination_ip} mono /><Detail label="Scan type" value={selectedAlert.scan_type.toUpperCase()} /><Detail label="Confidence" value={`${Math.round(selectedAlert.confidence * 100)}%`} /><Detail label="Events" value={String(selectedAlert.event_count)} /><Detail label="Ports" value={selectedAlert.unique_ports.join(', ')} mono /><Detail label="First seen" value={formatTime(selectedAlert.first_seen)} /><Detail label="Last seen" value={formatTime(selectedAlert.last_seen)} /></dl><div className="drawer-explanation"><strong>Detection explanation</strong><p>{selectedAlert.detection_reason}</p></div><div className="drawer-explanation"><strong>Investigation guidance</strong><ol><li>Confirm source ownership and whether scanning is authorized.</li><li>Review event timing, destinations, and connection outcomes.</li><li>Correlate with firewall and endpoint telemetry before escalation.</li></ol></div><div className="drawer-explanation"><strong>Supporting event evidence</strong><ul>{selectedEvidence.slice(0, 20).map((event) => <li className="mono" key={event.event_id}>{event.event_id} · {event.destination_ip}:{event.destination_port ?? '—'}</li>)}</ul>{selectedEvidence.length > 20 && <small>Showing 20 of {selectedEvidence.length} evidence events.</small>}</div><label className="form-label">Assign analyst<input value={assignedAnalyst} maxLength={120} onChange={(event) => setAssignedAnalyst(event.target.value)} placeholder="Analyst name" /></label><label className="form-label">Alert status<select value={selectedAlert.status} onChange={(event) => void updateAlertStatus(event.target.value).catch((reason) => setIngestMessage(String(reason)))}>{['New', 'Investigating', 'Escalated', 'Resolved', 'Closed', 'False Positive'].map((status) => <option key={status}>{status}</option>)}</select></label><div className="heading-actions"><button className="button button-subtle" onClick={() => void updateAlertStatus(selectedAlert.status).catch((reason) => setIngestMessage(String(reason)))}>Save alert changes</button><button className="button button-primary" onClick={() => void createIncident().catch((reason) => setIngestMessage(String(reason)))}>Create incident</button></div><div className="drawer-evidence">Evidence references <span>{selectedEvidence.length} persisted event records</span></div></aside></div>}
+      {selectedAlert && <div className="drawer-backdrop" onClick={() => setSelectedAlert(null)}><aside className="alert-drawer" onClick={(event) => event.stopPropagation()}><div className="drawer-heading"><div><span className="eyebrow">ALERT INVESTIGATION</span><h2>{selectedAlert.rule_name}</h2></div><button className="icon-button" aria-label="Close alert details" onClick={() => setSelectedAlert(null)}><X size={17} /></button></div><span className={severityClass(selectedAlert.severity)}>{selectedAlert.severity}</span><dl className="alert-details"><Detail label="Alert ID" value={selectedAlert.alert_id} mono /><Detail label="Rule ID" value={selectedAlert.rule_id} mono /><Detail label="Source" value={selectedAlert.source_ip} mono /><Detail label="Destination" value={selectedAlert.destination_ip} mono /><Detail label="Scan type" value={selectedAlert.scan_type.toUpperCase()} /><Detail label="Confidence" value={`${Math.round(selectedAlert.confidence * 100)}%`} /><Detail label="Events" value={String(selectedAlert.event_count)} /><Detail label="Ports" value={selectedAlert.unique_ports.join(', ')} mono /><Detail label="First seen" value={formatTime(selectedAlert.first_seen)} /><Detail label="Last seen" value={formatTime(selectedAlert.last_seen)} /></dl><div className="drawer-explanation"><strong>Detection explanation</strong><p>{selectedAlert.detection_reason}</p></div><div className="drawer-explanation"><strong>Investigation guidance</strong><ol><li>Confirm source ownership and whether scanning is authorized.</li><li>Review event timing, destinations, and connection outcomes.</li><li>Correlate with firewall and endpoint telemetry before escalation.</li></ol></div><div className="drawer-explanation"><strong>Supporting event evidence</strong><ul>{selectedEvidence.slice(0, 20).map((event) => <li className="mono" key={event.event_id}>{event.event_id} · {event.destination_ip}:{event.destination_port ?? '—'}</li>)}</ul>{selectedEvidence.length > 20 && <small>Showing 20 of {selectedEvidence.length} evidence events.</small>}</div><label className="form-label">Assign analyst<input disabled={!canWrite} value={assignedAnalyst} maxLength={120} onChange={(event) => setAssignedAnalyst(event.target.value)} placeholder="Analyst name" /></label><label className="form-label">Alert status<select disabled={!canWrite} value={selectedAlert.status} onChange={(event) => void updateAlertStatus(event.target.value).catch((reason) => setIngestMessage(String(reason)))}>{['New', 'Investigating', 'Escalated', 'Resolved', 'Closed', 'False Positive'].map((status) => <option key={status}>{status}</option>)}</select></label>{canWrite && <div className="heading-actions"><button className="button button-subtle" onClick={() => void updateAlertStatus(selectedAlert.status).catch((reason) => setIngestMessage(String(reason)))}>Save alert changes</button><button className="button button-primary" onClick={() => void createIncident().catch((reason) => setIngestMessage(String(reason)))}>Create incident</button></div>}<div className="drawer-evidence">Evidence references <span>{selectedEvidence.length} persisted event records</span></div></aside></div>}
     </main>
   )
 }

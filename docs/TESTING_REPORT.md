@@ -7,12 +7,16 @@ Date: 2026-11-01
 | Command | Result | Scope |
 |---|---|---|
 | `.venv/bin/python -m pytest -q` (before change) | 36 passed | Backend baseline. |
-| `.venv/bin/python -m pytest -q` (after change) | 44 passed | Full backend unit/API suite, including new allowlist and threshold coverage. |
-| `npm run lint` | Passed | ESLint configured for `app/`. |
-| `npm run typecheck` | Passed | `tsc --noEmit`. |
-| `npm run build` | Passed | Next.js production build, including TypeScript phase. |
+| `.venv/bin/python -m pytest -q` (current) | 52 passed | Backend unit/API suite, including PDF endpoint/content, PostgreSQL URL normalization, and isolated SQLite migration checks. |
+| `npm run lint` (current) | Passed | ESLint configured for `app/`; includes account-management UI correction. |
+| `npm run typecheck` (current) | Passed | `tsc --noEmit`. |
+| `npm run build` (current) | Passed | Next.js production build, including TypeScript phase. |
+| `.venv/bin/ruff check --select E4,E7,E9,F backend tests` | Passed | Same Ruff correctness rules configured in CI. |
+| `.venv/bin/pip check` | Passed | Installed Python dependency consistency. |
+| `npm run test:e2e` | 1 passed | Chromium browser workflow: administrator sign-in, create analyst, generate detections, investigate and assign alert, create/update incident, verify audit actor, download PDF. |
+| PostgreSQL 17 Docker integration check | Passed | Fresh container, Alembic upgrade/check, and FastAPI `/health` database connectivity; temporary container was stopped and removed. |
 
-The final backend and frontend checks were run after implementation changes. No frontend source code changed in this increment; frontend checks confirm the existing app still passes its configured lint, type, and build gates.
+The current backend and frontend checks were rerun after implementation changes.
 
 ## New Regression Coverage
 
@@ -21,12 +25,18 @@ The final backend and frontend checks were run after implementation changes. No 
 - IPv4 and IPv6 allowlist parsing and invalid-entry rejection are covered.
 - Startup configuration parsing and invalid threshold/allowlist rejection are covered.
 - API-level check verifies allowlisted synthetic events persist and count in event metrics while creating no alerts.
+- PDF endpoint creates valid parseable PDFs from persisted records; tests check expected report labels, severity/rule content, metric text, response disposition, and invalid period validation.
+- The frontend exposes the weekly PDF report endpoint.
+- Alembic migration applies to a fresh isolated SQLite database and creates all expected application tables. `alembic check` reports no schema drift after upgrade.
+- PostgreSQL 17: initial migration and schema check completed; API health returned `{"status":"ok","mode":"offline-demo","database":"connected"}`.
+- PostgreSQL URL normalization selects psycopg 3.
 
 ## Not Executed / Not Established
 
-- No browser automation, Playwright, load/performance test, migration test, container build, or clean-environment installation was run in this pass.
+- No load/performance test, complete application container build/Compose deployment, or clean-environment installation was run in this pass. Browser E2E covers one local administrator workflow, not all pages or roles.
 - No live Nmap, packet capture, Zeek/Suricata process, Splunk HEC, or Elasticsearch service was available or exercised.
 - No security scanner, dependency audit, formal type checker for Python, or detection-quality benchmark was run in this pass.
+- GitHub Actions workflow files were added, but no remote Actions execution was available; Gitleaks, dependency review, and container scanning are not claimed as executed.
 - The labeled synthetic tests do not establish precision, recall, false-positive rate, or field accuracy.
 
 Only the results in the executed-check table are claimed as successful.

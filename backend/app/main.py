@@ -3,27 +3,102 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import csv
 from datetime import datetime, timedelta, timezone
+from collections import defaultdict, deque
+import ipaddress
 import io
 import os
 import secrets
+import threading
+import time
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.responses import JSONResponse
 
-from backend.app.database import AlertRow, AuditLogRow, EventRow, IncidentRow, SessionLocal, create_tables
+from backend.app.auth import (
+    ADMIN_ROLES,
+    READ_ROLES,
+    SESSION_COOKIE,
+    SESSION_SECONDS,
+    TEAM_ROLES,
+    WRITE_ROLES,
+    create_user,
+    new_session,
+    role_dependency,
+    token_hash,
+    verify_csrf,
+    verify_password,
+)
+from backend.app.database import AlertRow, AuditLogRow, AuthSessionRow, EventRow, IncidentRow, SessionLocal, UserRow, create_tables
 from backend.app.generator import SCENARIOS, generate_events
 from backend.app.pipeline import DEFAULT_THRESHOLD, IPNetwork, detect_scans, parse_log, parse_source_allowlist
+from backend.app.pcap import PcapFormatError, PcapRecordLimitError, parse_pcap
+from backend.app.reports import ReportPeriod, generate_soc_pdf
 from backend.app.schemas import NetworkEvent
 
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_UPLOAD_REQUEST_BYTES = MAX_UPLOAD_BYTES + 128 * 1024
+MAX_UPLOAD_RECORDS = 20_000
+MAX_PARSE_ERRORS_RETURNED = 100
+MAX_DETECTION_CONTEXT_EVENTS = 50_000
 DETECTION_HISTORY_SECONDS = 60 * 60
+_COOKIE_SECURE_SETTING = os.getenv("LAB_COOKIE_SECURE", "false").strip().lower()
+if _COOKIE_SECURE_SETTING not in {"0", "1", "false", "true", "no", "yes"}:
+    raise RuntimeError("LAB_COOKIE_SECURE must be true or false")
+AUTH_COOKIE_SECURE = _COOKIE_SECURE_SETTING in {"1", "true", "yes"}
+_API_HOST = os.getenv("LAB_HOST", "127.0.0.1").strip().strip("[]").lower()
+try:
+    _API_HOST_IS_LOOPBACK = _API_HOST == "localhost" or ipaddress.ip_address(_API_HOST).is_loopback
+except ValueError:
+    _API_HOST_IS_LOOPBACK = False
+if not _API_HOST_IS_LOOPBACK and not AUTH_COOKIE_SECURE:
+    raise RuntimeError("Set LAB_COOKIE_SECURE=true when LAB_HOST is not loopback")
+ALLOWED_ORIGINS = tuple(
+    origin.strip()
+    for origin in os.getenv("LAB_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if origin.strip()
+)
+
+
+class SlidingWindowLimiter:
+    def __init__(self) -> None:
+        self._entries: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+        self._windows: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, scope: str, key: str, limit: int, window_seconds: int) -> bool:
+        now = time.monotonic()
+        identity = (scope, key)
+        with self._lock:
+            self._windows[scope] = window_seconds
+            if len(self._entries) >= 10_000:
+                self._entries = defaultdict(
+                    deque,
+                    {
+                        item: timestamps
+                        for item, timestamps in self._entries.items()
+                        if timestamps and timestamps[-1] > now - self._windows.get(item[0], window_seconds)
+                    },
+                )
+            if identity not in self._entries and len(self._entries) >= 10_000:
+                return False
+            timestamps = self._entries[identity]
+            while timestamps and timestamps[0] <= now - window_seconds:
+                timestamps.popleft()
+            if len(timestamps) >= limit:
+                return False
+            timestamps.append(now)
+            return True
+
+
+request_limiter = SlidingWindowLimiter()
 
 
 def _configured_detection_threshold() -> int:
@@ -74,6 +149,27 @@ class IncidentUpdate(BaseModel):
     note: str | None = Field(default=None, max_length=4000)
 
 
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class UserCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    password: str = Field(min_length=12, max_length=1024)
+    role: Literal["security_admin", "soc_manager", "soc_analyst", "read_only_viewer"]
+
+
+class UserActiveUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    is_active: bool
+
+
 def _record_audit(session: Session, entity_type: str, entity_id: str, action: str, actor: str, details: dict) -> None:
     session.add(
         AuditLogRow(
@@ -102,6 +198,15 @@ def _incident_payload(row: IncidentRow) -> dict:
     }
 
 
+def _validate_assignee(session: Session, username: str | None) -> None:
+    if username is None:
+        return
+    normalized = username.strip().lower()
+    user = session.scalar(select(UserRow).where(UserRow.username == normalized, UserRow.is_active.is_(True)))
+    if user is None:
+        raise HTTPException(status_code=422, detail="Assignee must be an active analyst account")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     create_tables()
@@ -111,11 +216,28 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Port Scan Detection Lab API", version="0.1.0", description="Offline-first local SOC telemetry and detection API.", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in os.getenv("LAB_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if origin.strip()],
-    allow_credentials=False,
+    allow_origins=list(ALLOWED_ORIGINS),
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-CSRF-Token"],
 )
+
+
+@app.middleware("http")
+async def bound_ingestion_requests(request: Request, call_next):
+    if request.url.path in {"/api/ingest/upload", "/api/ingest/pcap"} and request.method == "POST":
+        if not request_limiter.allow("log-upload", _client_key(request), 10, 60):
+            return JSONResponse(status_code=429, content={"detail": "Upload rate limit exceeded"})
+        length = request.headers.get("content-length")
+        if length is None:
+            return JSONResponse(status_code=411, content={"detail": "Content-Length is required for log uploads"})
+        try:
+            request_length = int(length)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+        if request_length > MAX_UPLOAD_REQUEST_BYTES:
+            return JSONResponse(status_code=413, content={"detail": "Upload request exceeds the configured size limit"})
+    return await call_next(request)
 
 
 def get_db():
@@ -123,12 +245,62 @@ def get_db():
         yield session
 
 
+def get_current_user(
+    request: Request,
+    session: Annotated[Session, Depends(get_db)],
+) -> UserRow:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    auth_session = session.get(AuthSessionRow, token_hash(token))
+    now = datetime.now(timezone.utc)
+    expires_at = auth_session.expires_at if auth_session is not None else None
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if auth_session is None or expires_at <= now:
+        if auth_session is not None:
+            session.delete(auth_session)
+            session.commit()
+        raise HTTPException(status_code=401, detail="Session is invalid or expired")
+    user = session.get(UserRow, auth_session.user_id)
+    if user is None or not user.is_active:
+        session.delete(auth_session)
+        session.commit()
+        raise HTTPException(status_code=401, detail="Session is invalid or expired")
+    origin = request.headers.get("origin")
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        if origin is not None and origin not in ALLOWED_ORIGINS:
+            raise HTTPException(status_code=403, detail="Untrusted request origin")
+        if not verify_csrf(auth_session, request.headers.get("X-CSRF-Token")):
+            raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
+    return user
+
+
+require_read = role_dependency(get_current_user, *READ_ROLES)
+require_write = role_dependency(get_current_user, *WRITE_ROLES)
+require_admin = role_dependency(get_current_user, *ADMIN_ROLES)
+require_team_admin = role_dependency(get_current_user, *TEAM_ROLES)
+
+
+def _client_key(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
 def _persist(session: Session, events: list[NetworkEvent]) -> tuple[int, list[dict]]:
+    event_ids = {event.event_id for event in events}
+    existing_ids: set[str] = set()
+    all_ids = sorted(event_ids)
+    for offset in range(0, len(all_ids), 500):
+        existing_ids.update(
+            session.scalars(
+                select(EventRow.id).where(EventRow.id.in_(all_ids[offset : offset + 500]))
+            ).all()
+        )
     fresh: list[NetworkEvent] = []
     added_ids: set[str] = set()
     for event in events:
         identifier = event.event_id
-        if identifier in added_ids or session.get(EventRow, identifier) is not None:
+        if identifier in added_ids or identifier in existing_ids:
             continue
         added_ids.add(identifier)
         fresh.append(event)
@@ -161,6 +333,8 @@ def _persist(session: Session, events: list[NetworkEvent]) -> tuple[int, list[di
                     EventRow.timestamp >= earliest - timedelta(seconds=DETECTION_HISTORY_SECONDS),
                     EventRow.timestamp <= latest,
                 )
+                .order_by(EventRow.timestamp.desc())
+                .limit(MAX_DETECTION_CONTEXT_EVENTS)
             ).all()
         )
     existing_events = [
@@ -173,7 +347,12 @@ def _persist(session: Session, events: list[NetworkEvent]) -> tuple[int, list[di
         threshold=DETECTION_THRESHOLD,
         allowlisted_sources=DETECTION_SOURCE_ALLOWLIST,
     )
-    alert_rows = session.scalars(select(AlertRow).where(AlertRow.source_ip.in_(source_ips))).all()
+    alert_rows = session.scalars(
+        select(AlertRow)
+        .where(AlertRow.source_ip.in_(source_ips))
+        .order_by(AlertRow.timestamp.desc())
+        .limit(MAX_DETECTION_CONTEXT_EVENTS)
+    ).all()
     existing_by_key: dict[tuple[str, str, str], list[AlertRow]] = {}
     for row in alert_rows:
         key = (row.payload.get("rule_id", ""), row.payload.get("source_ip", ""), row.payload.get("destination_ip", ""))
@@ -228,8 +407,155 @@ def health() -> dict:
     return {"status": "ok", "mode": "offline-demo", "database": "connected"}
 
 
+@app.post("/api/auth/login")
+def login(credentials: LoginRequest, request: Request, response: Response, session: Annotated[Session, Depends(get_db)]) -> dict:
+    if not request_limiter.allow("login-ip", _client_key(request), 10, 15 * 60):
+        raise HTTPException(status_code=429, detail="Too many login attempts; try again later")
+    username = credentials.username.strip().lower()
+    if not request_limiter.allow("login-user", username, 8, 15 * 60):
+        raise HTTPException(status_code=429, detail="Too many login attempts; try again later")
+    origin = request.headers.get("origin")
+    if origin is not None and origin not in ALLOWED_ORIGINS:
+        raise HTTPException(status_code=403, detail="Untrusted request origin")
+    user = session.scalar(select(UserRow).where(UserRow.username == username))
+    if user is None or not user.is_active or not verify_password(
+        credentials.password,
+        user.password_hash if user is not None else "$invalid$0$0$0$$",
+    ):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token, csrf_token, _ = new_session(session, user)
+    _record_audit(session, "user", user.id, "login", user.username, {})
+    session.commit()
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=SESSION_SECONDS,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite="strict",
+        path="/",
+    )
+    return {"user": {"username": user.username, "role": user.role}, "csrf_token": csrf_token}
+
+
+@app.get("/api/auth/me")
+def current_user(user: Annotated[UserRow, Depends(get_current_user)]) -> dict:
+    return {"username": user.username, "role": user.role}
+
+
+@app.get("/api/auth/csrf")
+def rotate_csrf(
+    request: Request,
+    user: Annotated[UserRow, Depends(get_current_user)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    token = request.cookies.get(SESSION_COOKIE)
+    auth_session = session.get(AuthSessionRow, token_hash(token or ""))
+    if auth_session is None or auth_session.user_id != user.id:
+        raise HTTPException(status_code=401, detail="Session is invalid or expired")
+    csrf_token = secrets.token_urlsafe(32)
+    auth_session.csrf_hash = token_hash(csrf_token)
+    session.commit()
+    return {"csrf_token": csrf_token}
+
+
+@app.post("/api/auth/logout")
+def logout(
+    request: Request,
+    response: Response,
+    user: Annotated[UserRow, Depends(get_current_user)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        auth_session = session.get(AuthSessionRow, token_hash(token))
+        if auth_session is not None:
+            session.delete(auth_session)
+    _record_audit(session, "user", user.id, "logout", user.username, {})
+    session.commit()
+    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, secure=AUTH_COOKIE_SECURE, samesite="strict")
+    return {"status": "logged_out"}
+
+
+@app.get("/api/users")
+def list_users(
+    _: Annotated[UserRow, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    users = session.scalars(select(UserRow).order_by(UserRow.username)).all()
+    return {
+        "items": [
+            {"user_id": user.id, "username": user.username, "role": user.role, "is_active": user.is_active}
+            for user in users
+        ]
+    }
+
+
+@app.get("/api/analysts")
+def list_analysts(
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    analysts = session.scalars(
+        select(UserRow)
+        .where(UserRow.role.in_(["soc_analyst", "soc_manager"]), UserRow.is_active.is_(True))
+        .order_by(UserRow.username)
+    ).all()
+    return {"items": [{"username": user.username, "role": user.role} for user in analysts]}
+
+
+@app.post("/api/users", status_code=201)
+def add_user(
+    user_data: UserCreate,
+    actor: Annotated[UserRow, Depends(require_team_admin)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    if actor.role == "soc_manager" and user_data.role not in {"soc_analyst", "read_only_viewer"}:
+        raise HTTPException(status_code=403, detail="SOC managers may only create analyst and viewer accounts")
+    try:
+        user = create_user(session, user_data.username, user_data.password, user_data.role)
+    except ValueError as error:
+        raise HTTPException(status_code=409 if "already exists" in str(error) else 422, detail=str(error)) from error
+    _record_audit(session, "user", user.id, "created", actor.username, {"role": user.role})
+    session.commit()
+    return {"user_id": user.id, "username": user.username, "role": user.role, "is_active": user.is_active}
+
+
+@app.patch("/api/users/{user_id}")
+def set_user_active(
+    user_id: str,
+    update: UserActiveUpdate,
+    actor: Annotated[UserRow, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    user = session.get(UserRow, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not update.is_active and user.id == actor.id:
+        raise HTTPException(status_code=422, detail="You cannot deactivate your own account")
+    if not update.is_active and user.role in ADMIN_ROLES:
+        active_admins = session.scalar(
+            select(func.count()).select_from(UserRow).where(UserRow.role.in_(ADMIN_ROLES), UserRow.is_active.is_(True))
+        ) or 0
+        if active_admins <= 1:
+            raise HTTPException(status_code=422, detail="Cannot deactivate the last active administrator")
+    user.is_active = update.is_active
+    if not user.is_active:
+        session.execute(delete(AuthSessionRow).where(AuthSessionRow.user_id == user.id))
+    _record_audit(session, "user", user.id, "active_status_changed", actor.username, {"is_active": user.is_active})
+    session.commit()
+    return {"user_id": user.id, "username": user.username, "role": user.role, "is_active": user.is_active}
+
+
 @app.get("/api/dashboard/summary")
-def dashboard_summary(session: Annotated[Session, Depends(get_db)]) -> dict:
+def dashboard_summary(
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    return _dashboard_summary(session)
+
+
+def _dashboard_summary(session: Session) -> dict:
     event_count = session.scalar(select(func.count()).select_from(EventRow)) or 0
     alert_count = session.scalar(select(func.count()).select_from(AlertRow)) or 0
     severity_rows = session.execute(select(AlertRow.severity, func.count()).group_by(AlertRow.severity)).all()
@@ -260,6 +586,7 @@ def dashboard_summary(session: Annotated[Session, Depends(get_db)]) -> dict:
 
 @app.get("/api/events")
 def list_events(
+    _: Annotated[UserRow, Depends(require_read)],
     session: Annotated[Session, Depends(get_db)],
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -278,14 +605,23 @@ def list_events(
 
 
 @app.get("/api/alerts")
-def list_alerts(session: Annotated[Session, Depends(get_db)], limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0)) -> dict:
+def list_alerts(
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
     rows = session.scalars(select(AlertRow).order_by(AlertRow.timestamp.desc()).limit(limit).offset(offset)).all()
     total = session.scalar(select(func.count()).select_from(AlertRow)) or 0
     return {"items": [row.payload for row in rows], "total": total, "limit": limit, "offset": offset}
 
 
 @app.get("/api/alerts/{alert_id}")
-def get_alert(alert_id: str, session: Annotated[Session, Depends(get_db)]) -> dict:
+def get_alert(
+    alert_id: str,
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
     row = session.get(AlertRow, alert_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -305,7 +641,12 @@ def get_alert(alert_id: str, session: Annotated[Session, Depends(get_db)]) -> di
 
 
 @app.patch("/api/alerts/{alert_id}")
-def update_alert(alert_id: str, update: AlertUpdate, session: Annotated[Session, Depends(get_db)]) -> dict:
+def update_alert(
+    alert_id: str,
+    update: AlertUpdate,
+    actor: Annotated[UserRow, Depends(require_write)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
     row = session.get(AlertRow, alert_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -313,23 +654,28 @@ def update_alert(alert_id: str, update: AlertUpdate, session: Annotated[Session,
     if not changes:
         raise HTTPException(status_code=422, detail="At least one alert field must be updated")
     note = changes.pop("note", None)
-    payload = dict(row.payload)
-    payload.update({key: value for key, value in changes.items() if key != "assigned_to"})
     if "assigned_to" in changes:
-        payload["assigned_to"] = changes["assigned_to"]
+        _validate_assignee(session, changes["assigned_to"])
+    payload = dict(row.payload)
+    payload.update(changes)
     row.payload = payload
     row.status = payload.get("status", row.status)
     row.severity = payload.get("severity", row.severity)
-    _record_audit(session, "alert", alert_id, "updated", "local-analyst", {"changes": changes, "note": note})
+    _record_audit(session, "alert", alert_id, "updated", actor.username, {"changes": changes, "note": note})
     session.commit()
     return payload
 
 
 @app.post("/api/incidents", status_code=201)
-def create_incident(request: IncidentCreate, session: Annotated[Session, Depends(get_db)]) -> dict:
+def create_incident(
+    request: IncidentCreate,
+    actor: Annotated[UserRow, Depends(require_write)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
     alert = session.get(AlertRow, request.alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="Alert not found")
+    _validate_assignee(session, request.assigned_to)
     now = datetime.now(timezone.utc)
     incident = IncidentRow(
         id=str(uuid4()),
@@ -344,13 +690,14 @@ def create_incident(request: IncidentCreate, session: Annotated[Session, Depends
     if not incident.title:
         raise HTTPException(status_code=422, detail="Incident title must not be blank")
     session.add(incident)
-    _record_audit(session, "incident", incident.id, "created", "local-analyst", {"alert_id": request.alert_id})
+    _record_audit(session, "incident", incident.id, "created", actor.username, {"alert_id": request.alert_id})
     session.commit()
     return _incident_payload(incident)
 
 
 @app.get("/api/incidents")
 def list_incidents(
+    _: Annotated[UserRow, Depends(require_read)],
     session: Annotated[Session, Depends(get_db)],
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -361,7 +708,11 @@ def list_incidents(
 
 
 @app.get("/api/incidents/{incident_id}")
-def get_incident(incident_id: str, session: Annotated[Session, Depends(get_db)]) -> dict:
+def get_incident(
+    incident_id: str,
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
     row = session.get(IncidentRow, incident_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Incident not found")
@@ -380,7 +731,12 @@ def get_incident(incident_id: str, session: Annotated[Session, Depends(get_db)])
 
 
 @app.patch("/api/incidents/{incident_id}")
-def update_incident(incident_id: str, update: IncidentUpdate, session: Annotated[Session, Depends(get_db)]) -> dict:
+def update_incident(
+    incident_id: str,
+    update: IncidentUpdate,
+    actor: Annotated[UserRow, Depends(require_write)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
     row = session.get(IncidentRow, incident_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Incident not found")
@@ -389,6 +745,8 @@ def update_incident(incident_id: str, update: IncidentUpdate, session: Annotated
         raise HTTPException(status_code=422, detail="At least one incident field must be updated")
     if changes.get("resolution", "not-supplied") is None:
         changes.pop("resolution")
+    if "assigned_to" in changes:
+        _validate_assignee(session, changes["assigned_to"])
     resolution = changes.get("resolution", row.resolution)
     if changes.get("status") in {"Resolved", "Closed"} and not (resolution and resolution.strip()):
         raise HTTPException(status_code=422, detail="A resolution is required before resolving or closing an incident")
@@ -402,7 +760,7 @@ def update_incident(incident_id: str, update: IncidentUpdate, session: Annotated
         "incident",
         incident_id,
         "status_changed" if row.status != previous_status else "updated",
-        "local-analyst",
+        actor.username,
         {"changes": changes, "note": note},
     )
     session.commit()
@@ -410,8 +768,11 @@ def update_incident(incident_id: str, update: IncidentUpdate, session: Annotated
 
 
 @app.get("/api/reports/summary")
-def summary_report(session: Annotated[Session, Depends(get_db)]) -> dict:
-    summary = dashboard_summary(session)
+def summary_report(
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    summary = _dashboard_summary(session)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "period": "all retained local records",
@@ -428,8 +789,11 @@ def summary_report(session: Annotated[Session, Depends(get_db)]) -> dict:
 
 
 @app.get("/api/reports/summary.csv")
-def summary_report_csv(session: Annotated[Session, Depends(get_db)]) -> Response:
-    summary = dashboard_summary(session)
+def summary_report_csv(
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+) -> Response:
+    summary = _dashboard_summary(session)
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow(["metric", "value"])
@@ -446,8 +810,28 @@ def summary_report_csv(session: Annotated[Session, Depends(get_db)]) -> Response
     )
 
 
+@app.get("/api/reports/summary.pdf")
+def summary_report_pdf(
+    request: Request,
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+    period: ReportPeriod = Query(default="all"),
+    download: bool = Query(default=True),
+) -> Response:
+    if not request_limiter.allow("pdf-report", _client_key(request), 20, 60):
+        raise HTTPException(status_code=429, detail="Report generation rate limit exceeded")
+    content = generate_soc_pdf(session, period)
+    disposition = "attachment" if download else "inline"
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disposition}; filename="sentinelsoc-{period}-report.pdf"'},
+    )
+
+
 @app.post("/api/demo/generate")
 def generate_demo(
+    _: Annotated[UserRow, Depends(require_write)],
     session: Annotated[Session, Depends(get_db)],
     scenario: str = Query(default="syn"),
     count: int = Query(default=40, ge=1, le=5000),
@@ -463,6 +847,7 @@ def generate_demo(
 
 @app.post("/api/ingest/upload")
 async def ingest_upload(
+    _: Annotated[UserRow, Depends(require_write)],
     session: Annotated[Session, Depends(get_db)],
     file: Annotated[UploadFile, File()],
     format_name: Annotated[Literal["zeek", "suricata", "firewall"], Query(alias="format")],
@@ -477,8 +862,58 @@ async def ingest_upload(
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError as error:
         raise HTTPException(status_code=400, detail="Log file must be UTF-8 text") from error
+    record_count = len(text.splitlines())
+    if record_count > MAX_UPLOAD_RECORDS:
+        raise HTTPException(status_code=413, detail=f"Upload exceeds the {MAX_UPLOAD_RECORDS} record limit")
     events, errors = parse_log(text, format_name, source_file=(file.filename or "upload").replace("\\", "/").split("/")[-1][:255])
     if not events and errors:
-        raise HTTPException(status_code=422, detail={"message": "No valid records found", "errors": errors[:20], "error_count": len(errors)})
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "No valid records found",
+                "errors": errors[:MAX_PARSE_ERRORS_RETURNED],
+                "error_count": len(errors),
+                "errors_truncated": len(errors) > MAX_PARSE_ERRORS_RETURNED,
+            },
+        )
     ingested, alerts = _persist(session, events)
-    return {"accepted": ingested, "parsed": len(events), "duplicates": len(events) - ingested, "parse_errors": errors, "alerts": alerts}
+    return {
+        "accepted": ingested,
+        "parsed": len(events),
+        "duplicates": len(events) - ingested,
+        "parse_errors": errors[:MAX_PARSE_ERRORS_RETURNED],
+        "parse_error_count": len(errors),
+        "parse_errors_truncated": len(errors) > MAX_PARSE_ERRORS_RETURNED,
+        "alerts": alerts,
+    }
+
+
+@app.post("/api/ingest/pcap")
+async def ingest_pcap(
+    _: Annotated[UserRow, Depends(require_write)],
+    session: Annotated[Session, Depends(get_db)],
+    file: Annotated[UploadFile, File()],
+) -> dict:
+    try:
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+    finally:
+        await file.close()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Capture exceeds the 5 MiB limit")
+    filename = (file.filename or "upload.pcap").replace("\\", "/").split("/")[-1][:255]
+    try:
+        events, malformed = parse_pcap(content, filename)
+    except PcapRecordLimitError as error:
+        raise HTTPException(status_code=413, detail=str(error)) from error
+    except PcapFormatError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if not events and malformed:
+        raise HTTPException(status_code=422, detail="Capture contained no supported valid network packets")
+    ingested, alerts = _persist(session, events)
+    return {
+        "accepted": ingested,
+        "parsed": len(events),
+        "duplicates": len(events) - ingested,
+        "malformed_packets": malformed,
+        "alerts": alerts,
+    }

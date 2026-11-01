@@ -6,8 +6,8 @@ const geist = Geist({ subsets: ["latin"], variable: '--font-geist-sans' });
 const geistMono = Geist_Mono({ subsets: ["latin"], variable: '--font-geist-mono' });
 
 export const metadata: Metadata = {
-  title: 'Port Scan Detection Lab | SOC Console',
-  description: 'Offline-first network telemetry normalization and port-scan detection lab.',
+  title: 'SentinelSOC | Network Threat Detection',
+  description: 'Offline-first security operations console for network telemetry and port-scan detection.',
   icons: {
     icon: [
       {

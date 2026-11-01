@@ -7,6 +7,7 @@ __v0_jsx-dev-runtime.ts
 node_modules/
 .next/
 .next-*/
+.env
 .env*.local
 .DS_Store
 .venv/
@@ -15,3 +16,5 @@ __pycache__/
 data/*.db
 data/*.db-*
 *.tsbuildinfo
+playwright-report/
+test-results/
