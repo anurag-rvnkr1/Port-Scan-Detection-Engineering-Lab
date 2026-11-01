@@ -24,7 +24,8 @@ Synthetic events are visibly labeled and never sent to the network. The applicat
 
 ```mermaid
 flowchart LR
-  UI[Next.js SOC console] -->|HTTP / JSON| API[FastAPI]
+  UI[Next.js SOC console] -->|same-origin /api| BFF[Next.js API proxy]
+  BFF -->|HTTP / JSON| API[FastAPI]
   API --> SCHEMA[Pydantic event schema]
   LOGS[Offline Zeek / Suricata / UFW files] --> PARSE[Format parsers]
   GEN[Deterministic synthetic generator] --> SCHEMA
@@ -72,6 +73,17 @@ Open <http://localhost:3000>. Use **Generate demo events** to create explicitly 
 The API binds to loopback by default and requires an administrator-created account. Keep it loopback-bound unless deployed behind a reviewed HTTPS reverse proxy with `LAB_COOKIE_SECURE=true` and explicit CORS origins.
 The development server uses its own `.next-dev` output so a production build does not overwrite its active cache.
 
+### Local Docker Compose
+
+The Compose stack runs PostgreSQL, applies Alembic migrations, and starts the API and frontend. It publishes only the frontend on loopback; the API port is not exposed on the host. Copy `.env.example` to `.env`, replace `POSTGRES_PASSWORD` with a URL-safe random value such as the output of `openssl rand -hex 32`, then run:
+
+```bash
+docker compose up --build --wait
+docker compose exec api python -m backend.app.admin create-admin
+```
+
+Open <http://localhost:3000>. If port 3000 is already occupied, set `FRONTEND_PORT` in `.env` to an available local port before starting. This HTTP setup is for local demonstration only, not production.
+
 ### Detection tuning
 
 The local API supports process-start configuration for detection thresholds and source-IP/CIDR allowlisting. For example:
@@ -88,6 +100,8 @@ The threshold must be between 3 and 65536. Allowlisted source events are still i
 
 ```bash
 .venv/bin/python -m pytest -q
+npm run lint
+npm run typecheck
 npm run build
 npm run test:e2e
 bash -n install.sh run_lab.sh nmap_commands.sh
@@ -129,7 +143,7 @@ Database migrations are managed with Alembic. Apply the initial migration with `
 
 ## Status and limitations
 
-This is an offline-first detection engineering prototype, not a production SOC platform. Features verified in this checkout and the still-pending production work are tracked in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md). PostgreSQL migrations are verified locally and a CI workflow is defined, but remote workflow execution and production deployment are pending. Nmap, live packet capture, SIEM delivery, Docker deployment, and browser-driven end-to-end testing are not implemented or verified. The API requires authentication but should remain loopback-bound until deployment controls are validated. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) and [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) before deployment.
+This is an offline-first detection engineering prototype, not a production SOC platform. Features verified in this checkout and the still-pending production work are tracked in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md). PostgreSQL migrations and a loopback-only Docker demo stack are locally verified; remote CI execution and production deployment are pending. Nmap, live packet capture, and SIEM delivery are not implemented. One browser-driven analyst workflow passes, but not all pages or roles have E2E coverage. Keep the API private; the Compose stack publishes only the frontend on loopback. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) and [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md).
 
 ## Repository Map
 
@@ -148,8 +162,8 @@ This is an offline-first detection engineering prototype, not a production SOC p
 
 - No Splunk or Elasticsearch client is implemented; the existing query/dashboard files remain reference examples and are not verified against this API's schema.
 - No controlled Nmap runner, sensor process, live packet capture, distributed or multi-technique correlation, or operator-facing detection UI. Source-IP/CIDR exclusions and threshold are startup environment settings only. The TCP Connect and low-and-slow heuristics remain simple threshold-based rules.
-- Authentication, backend role checks, audit identity, bounded ingestion, PDF reports, and a GitHub Actions workflow are implemented and covered by local checks; full teams, E2E tests, remote CI execution, and production security validation remain pending.
-- PostgreSQL migrations are tested on SQLite and PostgreSQL 17; no full Docker Compose application deployment is implemented. Redis/background jobs and container scanning are also pending.
+- Authentication, backend role checks, audit identity, bounded ingestion, PDF reports, and one Playwright workflow are covered by local checks; full teams, complete E2E coverage, remote CI execution, and production security validation remain pending.
+- PostgreSQL migrations are tested on SQLite and PostgreSQL 17; the local Docker Compose application stack is smoke-tested. Redis/background jobs, container scanning, and production deployment are pending.
 - Dashboard charts summarize the latest 500 records loaded by the UI. The API summary counts stored events, but filtering, sorting, and server-side time-window queries remain limited.
 - Synthetic fixture tests validate implemented behavior, not field performance on production traffic.
 

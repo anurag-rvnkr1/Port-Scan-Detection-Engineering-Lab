@@ -21,6 +21,7 @@ No evidence of shell-based command execution, a Nmap runner, PCAP parsing, or SI
 - SQLAlchemy parameterization is used for application queries; no string-built SQL was identified in reviewed routes.
 - Event schemas validate IP addresses and ports, and ingestion deduplicates IDs.
 - `LAB_DETECTION_SOURCE_ALLOWLIST` is for excluding detection noise. It is not an authorized-target allowlist and must not be used to authorize scanning.
+- In the local Compose stack, the API and PostgreSQL are on an internal network with no published host ports; the frontend alone is published on host loopback. The Next.js server-side proxy forwards same-origin API traffic, caps request bodies at 6 MiB, and uses no-store responses. This topology has a local smoke test; it is not a substitute for production TLS, proxy identity verification, and network-policy review.
 
 ## Remaining Before Shared or Production Use
 

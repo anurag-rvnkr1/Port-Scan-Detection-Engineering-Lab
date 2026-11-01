@@ -52,12 +52,11 @@ services:
       dockerfile: Dockerfile.frontend
       args:
         NEXT_PUBLIC_API_BASE_URL: ""
-        API_PROXY_TARGET: http://api:8000
+        NEXT_PUBLIC_API_PROXY_TARGET: http://api:8000
     environment:
       NODE_ENV: production
       PORT: 3000
       HOSTNAME: 0.0.0.0
-      API_PROXY_TARGET: http://api:8000
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
     depends_on:
@@ -70,7 +69,7 @@ services:
       retries: 10
       start_period: 15s
     restart: unless-stopped
-    networks: [soc-internal]
+    networks: [soc-internal, frontend-ingress]
     security_opt:
       - no-new-privileges:true
 
@@ -81,3 +80,4 @@ volumes:
 networks:
   soc-internal:
     internal: true
+  frontend-ingress:

@@ -2,13 +2,11 @@
 
 ## Supported Deployment
 
-This checkout supports local development only: Next.js frontend, FastAPI backend, and SQLite. The API binds to loopback by default and enforces authenticated sessions and roles. It is not yet a production SOC deployment.
-
-PostgreSQL and Alembic have local integration coverage, but Docker deployment, Redis, worker processes, TLS termination, production secrets management, and production health/backup procedures are not implemented. PDF reports are available locally but are not yet separately tested in a deployed production environment. Do not infer deployment support from the desired architecture.
+The repository supports local development with SQLite and a loopback-only Docker Compose demo stack using PostgreSQL. The Compose stack binds only the frontend to `127.0.0.1`; the API and database have no published host ports and communicate on an internal Docker network. The frontend is attached to a separate bridge network to receive the local published port. Compose runs Alembic migrations before starting the API. This is not a production deployment: there is no TLS termination, Redis/worker, automated backup, sensor/SIEM service, distributed rate limiter, or production secrets management.
 
 ## Local Setup
 
-Requirements: Python 3.10+, Node.js 20+, and npm.
+Requirements for local development: Python 3.10+, Node.js 20+, and npm. Requirements for Docker: Docker Engine and the Docker Compose plugin.
 
 ```bash
 ./install.sh
@@ -53,6 +51,24 @@ An initial Alembic migration is available. To prepare a database before starting
 ```
 
 `LAB_DATABASE_URL` selects the migration target; for PostgreSQL, use a `postgresql://` URL (the app selects psycopg 3). The initial migration and API database health check were verified against PostgreSQL 17 in an isolated temporary container; this does not establish a supported production deployment.
+
+## Local Docker Compose Demo
+
+Copy `.env.example` to `.env` and replace the example database password with a locally generated URL-safe value. For example, `openssl rand -hex 32` produces a hexadecimal password that can be pasted into `POSTGRES_PASSWORD`. Never commit `.env`.
+
+```bash
+docker compose up --build --wait
+```
+
+The dashboard is available at <http://localhost:3000>. Only this loopback address is published; the API is proxied by the frontend and is not exposed as a host port. To provision the initial administrator, run:
+
+```bash
+docker compose exec api python -m backend.app.admin create-admin
+```
+
+Stop the stack with `docker compose down`; named database volumes remain in place. `docker compose down --volumes` permanently deletes the Compose database and backend volumes, so use it only when intentionally discarding local demo data. The example uses HTTP and is for local demonstration only; do not expose it on an untrusted network.
+
+The frontend API proxy target is supplied as a build argument (`http://api:8000` in Compose) and is internal to the Docker network. If changing this target, rebuild the frontend image. Do not put credentials in this value.
 
 ## Data Backup and Restore
 

@@ -4,7 +4,8 @@
 
 ```mermaid
 flowchart LR
-  Browser[Next.js dashboard] -->|HTTP JSON| API[FastAPI]
+  Browser[Next.js dashboard] -->|same-origin /api| BFF[Next.js API proxy]
+  BFF -->|internal HTTP JSON| API[FastAPI]
   Synthetic[Synthetic generator] --> Schema[Pydantic canonical event]
   Zeek[Offline Zeek TSV] --> Parser[Format parsers]
   Suricata[Offline Suricata EVE JSONL] --> Parser
@@ -17,7 +18,7 @@ flowchart LR
   Persistence --> Reports[ReportLab PDF / CSV]
 ```
 
-The application is a synchronous prototype. SQLite local development continues to create missing tables with SQLAlchemy `create_all`; Alembic migration support is provided for managed deployments. PostgreSQL URLs are normalized to the psycopg 3 driver. The initial migration and FastAPI health/database connectivity were verified against an isolated PostgreSQL 17 container; deployment orchestration remains pending. Authenticated report requests aggregate persisted records and generate PDFs in the API process.
+The application is a synchronous prototype. SQLite local development continues to create missing tables with SQLAlchemy `create_all`; Docker Compose uses PostgreSQL 17 and runs Alembic before starting the API. PostgreSQL URLs are normalized to the psycopg 3 driver. The local Compose stack was built and smoke-tested; this is not production deployment support. Its API and database share an internal network, while the frontend is the only service published and binds to host loopback. Authenticated report requests aggregate persisted records and generate PDFs in the API process.
 
 ## Event Flow
 
@@ -52,4 +53,4 @@ Implemented rules and limitations are tracked in [FEATURE_STATUS.md](./FEATURE_S
 
 ## Target Architecture Not Yet Present
 
-Redis/Celery, PostgreSQL, Alembic, WebSockets/SSE, live sensors, Nmap jobs, PCAP parsing, SIEM clients, Docker, and CI are future work. The platform should remain offline-capable without external services while these are added and verified.
+Redis/Celery, WebSockets/SSE, live sensors, authorized Nmap jobs, Splunk/Elasticsearch clients, and production TLS, backup, monitoring, and scaling controls are future work. Offline PCAP parsing, PostgreSQL/Alembic, local Docker Compose, and CI configuration exist, but only the scoped checks described in [FEATURE_STATUS.md](./FEATURE_STATUS.md) are verified.

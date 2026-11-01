@@ -5,12 +5,6 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  async rewrites() {
-    const apiTarget = process.env.API_PROXY_TARGET
-    return apiTarget
-      ? [{ source: '/api/:path*', destination: `${apiTarget}/api/:path*` }]
-      : []
-  },
 }
 
 export default nextConfig

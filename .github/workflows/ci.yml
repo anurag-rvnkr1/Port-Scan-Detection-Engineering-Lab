@@ -63,4 +63,4 @@ jobs:
           push: false
           build-args: |
             NEXT_PUBLIC_API_BASE_URL=
-            API_PROXY_TARGET=http://api:8000
+            NEXT_PUBLIC_API_PROXY_TARGET=http://api:8000
