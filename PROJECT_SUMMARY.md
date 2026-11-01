@@ -10,12 +10,12 @@ This repository now has a tested offline backend pipeline and an API-backed SOC 
 - Pydantic canonical event schema with IPv4/IPv6 validation, UTC timestamp normalization, protocol/flag normalization, and raw-event preservation.
 - Deterministic synthetic scenarios: SYN, Connect-like, sweep, FIN, NULL, XMAS, and benign TCP records.
 - Parsers for included Zeek TSV, Suricata EVE JSON Lines, and UFW-style firewall sample logs.
-- Evidence-backed horizontal, vertical, SYN, FIN, NULL, and XMAS detections.
+- Evidence-backed horizontal, vertical, TCP connect, low-and-slow, SYN, FIN, NULL, and XMAS detections.
 - API-backed dashboard views for metrics, events, alerts, offline ingestion, generation, and CSV export.
 - Regression tests for schema, samples, malformed records, negative cases, persistence, and deduplication.
-- Root-relative non-root installer and local API runner.
+- Root-relative non-root installer and loopback-bound local API runner.
 
-Verification evidence at implementation time: `15 passed` in the focused pytest suite; `npm run build` succeeds with TypeScript checks enabled; `bash -n install.sh run_lab.sh` succeeds. See the current implementation plan for remaining gates.
+Verification evidence at implementation time: `21 passed` in the focused pytest suite; `npm run lint` succeeds; `npm run build` succeeds with TypeScript checks enabled; shell syntax checks pass. Production npm audit reports zero vulnerabilities after the frontend dependency upgrades. See the current implementation plan for remaining gates.
 
 ## Not Yet Implemented or Verified
 

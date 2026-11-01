@@ -69,3 +69,36 @@ def test_upload_is_idempotent_for_same_file_and_filename(monkeypatch) -> None:
     finally:
         main.app.dependency_overrides.clear()
         engine.dispose()
+
+
+def test_health_checks_the_database() -> None:
+    with TestClient(main.app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["database"] == "connected"
+
+
+def test_upload_rejects_files_over_size_limit() -> None:
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/ingest/upload?format=suricata",
+            files={"file": ("large.json", b"x" * (main.MAX_UPLOAD_BYTES + 1), "application/json")},
+        )
+
+    assert response.status_code == 413
+
+
+def test_cors_allows_local_dashboard_and_rejects_unlisted_origin() -> None:
+    with TestClient(main.app) as client:
+        local = client.options(
+            "/api/dashboard/summary",
+            headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET"},
+        )
+        remote = client.options(
+            "/api/dashboard/summary",
+            headers={"Origin": "https://untrusted.example", "Access-Control-Request-Method": "GET"},
+        )
+
+    assert local.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "access-control-allow-origin" not in remote.headers

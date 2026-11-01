@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -56,7 +56,7 @@ def test_malformed_records_are_reported_without_discarding_valid_events() -> Non
     assert errors[0]["line"] == 2
 
 
-@pytest.mark.parametrize("scenario,expected_rule", [("syn", "tcp_syn_scan"), ("fin", "tcp_fin_scan"), ("null", "tcp_null_scan"), ("xmas", "tcp_xmas_scan"), ("sweep", "vertical_port_sweep")])
+@pytest.mark.parametrize("scenario,expected_rule", [("syn", "tcp_syn_scan"), ("syn", "horizontal_port_scan"), ("connect", "tcp_connect_scan"), ("fin", "tcp_fin_scan"), ("null", "tcp_null_scan"), ("xmas", "tcp_xmas_scan"), ("sweep", "vertical_port_sweep")])
 def test_scan_scenarios_produce_explainable_alerts(scenario: str, expected_rule: str) -> None:
     events = generate_events(count=30, scenario=scenario, seed=10)
 
@@ -67,6 +67,18 @@ def test_scan_scenarios_produce_explainable_alerts(scenario: str, expected_rule:
     assert matching[0].event_count >= 3
     assert matching[0].evidence
     assert matching[0].detection_reason
+
+
+def test_slow_multiport_activity_is_labeled_as_a_heuristic() -> None:
+    events = generate_events(count=30, scenario="syn", seed=11)
+    events = [
+        event.model_copy(update={"timestamp": event.timestamp + timedelta(seconds=index * 15 * 60 // len(events))})
+        for index, event in enumerate(events)
+    ]
+
+    alerts = detect_scans(events)
+
+    assert any(alert.rule_id == "low_and_slow_recon" for alert in alerts)
 
 
 def test_benign_and_single_events_do_not_create_scan_alerts() -> None:

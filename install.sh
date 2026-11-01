@@ -13,10 +13,14 @@ if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
     printf 'Node.js and npm are required for the frontend. Install Node.js 20 or newer, then rerun this script.\n' >&2
     exit 1
 fi
+if ! node -e 'const major = Number(process.versions.node.split(".")[0]); process.exit(major < 20 ? 1 : 0)'; then
+    printf 'Node.js 20 or newer is required. Found %s.\n' "$(node --version)" >&2
+    exit 1
+fi
 
 python3 -m venv "$PROJECT_ROOT/.venv"
 "$PROJECT_ROOT/.venv/bin/python" -m pip install --upgrade pip
-"$PROJECT_ROOT/.venv/bin/pip" install -r "$PROJECT_ROOT/requirements.txt"
+"$PROJECT_ROOT/.venv/bin/pip" install -r "$PROJECT_ROOT/requirements.lock"
 npm --prefix "$PROJECT_ROOT" ci
 mkdir -p "$PROJECT_ROOT/data"
 

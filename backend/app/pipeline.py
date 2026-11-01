@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from ipaddress import ip_address
 from typing import Iterable
 
@@ -145,6 +145,20 @@ def detect_scans(events: Iterable[NetworkEvent], threshold: int = DEFAULT_THRESH
         ports = {record.destination_port for record in records if record.destination_port is not None}
         if len(ports) >= threshold:
             alerts.append(_make_alert("horizontal_port_scan", "Horizontal port scan", source, destination, records, sorted(ports), "syn"))
+
+        connected_records = [
+            record
+            for record in records
+            if (record.connection_state or "").upper() in {"SF", "S1", "ESTABLISHED", "CONNECTED", "OPEN"}
+        ]
+        connected_ports = {record.destination_port for record in connected_records if record.destination_port is not None}
+        if len(connected_ports) >= threshold:
+            alerts.append(_make_alert("tcp_connect_scan", "TCP connect scan", source, destination, connected_records, sorted(connected_ports), "connect"))
+
+        ordered_records = sorted(records, key=lambda event: event.timestamp)
+        elapsed = ordered_records[-1].timestamp - ordered_records[0].timestamp
+        if len(ports) >= threshold and elapsed >= timedelta(minutes=5):
+            alerts.append(_make_alert("low_and_slow_recon", "Low-and-slow reconnaissance", source, destination, ordered_records, sorted(ports), "low_and_slow"))
 
         syn_records = [record for record in records if record.tcp_flags is not None and "SYN" in record.tcp_flags and "ACK" not in record.tcp_flags]
         syn_ports = {record.destination_port for record in syn_records if record.destination_port is not None}

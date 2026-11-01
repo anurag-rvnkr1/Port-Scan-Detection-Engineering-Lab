@@ -206,13 +206,13 @@ export default function Home() {
     const text = `${alert.rule_name} ${alert.source_ip} ${alert.destination_ip} ${alert.scan_type}`.toLowerCase()
     return text.includes(query.toLowerCase()) && (severityFilter === 'All severities' || alert.severity === severityFilter)
   })
-  const timeline = events.reduce<{ time: string; events: number }[]>((points, event) => {
-    const key = new Date(event.timestamp)
-    key.setMinutes(Math.floor(key.getMinutes() / 5) * 5, 0, 0)
-    const label = key.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    const point = points.find((item) => item.time === label)
+  const timeline = [...events].sort((first, second) => Date.parse(first.timestamp) - Date.parse(second.timestamp)).reduce<{ time: string; label: string; events: number }[]>((points, event) => {
+    const bucket = new Date(Math.floor(Date.parse(event.timestamp) / 300000) * 300000)
+    const key = bucket.toISOString()
+    const label = bucket.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
+    const point = points.find((item) => item.time === key)
     if (point) point.events += 1
-    else points.push({ time: label, events: 1 })
+    else points.push({ time: key, label, events: 1 })
     return points
   }, []).slice(-12)
   const topSources = Object.entries(events.reduce<Record<string, number>>((counts, event) => {
@@ -302,7 +302,7 @@ export default function Home() {
                   <AreaChart data={timeline} margin={{ top: 10, right: 8, left: -20, bottom: 0 }}>
                     <defs><linearGradient id="eventFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#b5e85d" stopOpacity={0.28} /><stop offset="100%" stopColor="#b5e85d" stopOpacity={0} /></linearGradient></defs>
                     <CartesianGrid stroke="#2c3029" strokeDasharray="3 5" vertical={false} />
-                    <XAxis dataKey="time" tick={{ fill: '#858a7e', fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <XAxis dataKey="label" tick={{ fill: '#858a7e', fontSize: 11 }} axisLine={false} tickLine={false} />
                     <YAxis allowDecimals={false} tick={{ fill: '#858a7e', fontSize: 11 }} axisLine={false} tickLine={false} />
                     <Tooltip contentStyle={{ background: '#1b1e18', border: '1px solid #373b32', borderRadius: 5, color: '#edf0e6', fontSize: 12 }} />
                     <Area type="monotone" dataKey="events" name="Events" stroke="#b5e85d" strokeWidth={2} fill="url(#eventFill)" />

@@ -73,3 +73,7 @@ Initial canonical event fields should include UTC timestamp, stable event ID, so
 ## Audit Status
 
 The audit documents verified current-state defects and a proposed sequence. The current checkout does not meet the stated production/recruiter acceptance criteria. Completion status must be updated as implementation and verification proceed.
+
+## Remediation Update
+
+Subsequent work in this checkout replaced the root installer and runner, added the offline FastAPI/SQLite pipeline and responsive API-backed dashboard, and added 21 backend tests. The installer completed locally; the API health, synthetic generation, alert persistence, dashboard route, and local-only CORS behavior were exercised over HTTP. The original Next.js dependency set included critical/high advisories; current verification reports zero production npm advisories after updating Next.js, PostCSS, and Zod. The full development dependency tree still has moderate minimatch advisories; the available forced fix proposes breaking ESLint changes and has not been applied. SIEM/live capture/deployment/incident/reporting work remains unimplemented as stated above.

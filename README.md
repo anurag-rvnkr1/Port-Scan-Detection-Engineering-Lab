@@ -8,7 +8,7 @@ An offline-first network telemetry normalization and port-scan detection lab. Th
 - Normalize IPv4/IPv6 events into a versioned schema and retain their raw input.
 - Ingest offline Zeek `conn.log`, Suricata EVE JSON Lines, and supported UFW syslog records. Bad lines are reported without discarding valid neighboring records.
 - Store events and explainable alerts in local SQLite; repeated ingestion of the same source file is deduplicated.
-- Detect multi-event horizontal port scans, vertical port sweeps, SYN patterns when TCP flags exist, and FIN/NULL/XMAS flag patterns when the source reports flags.
+- Detect multi-event horizontal port scans, vertical port sweeps, successful TCP connect patterns, low-and-slow multi-port activity, SYN patterns when TCP flags exist, and FIN/NULL/XMAS patterns when the source reports flags.
 - View actual stored metrics, events, and alerts in the dashboard; inspect alert evidence and export visible rows to CSV.
 - Explore the local REST API through OpenAPI at `/docs`.
 
@@ -71,7 +71,7 @@ The Python tests cover schema validation, supported sample parsing, malformed li
 
 ## Detection Behavior
 
-The current default threshold is eight distinct TCP destination ports for horizontal scanning or eight destinations on one TCP port for a vertical sweep. SYN detection requires at least that many distinct ports with SYN present and ACK absent. FIN, NULL, and XMAS indicators require at least three matching events across three ports. These are configurable in the Python detection function, not yet exposed as operator settings. A single event does not create an alert.
+The current default threshold is eight distinct TCP destination ports for horizontal scanning, successful connect scanning, or a vertical sweep across eight destinations on one TCP port. SYN detection requires at least that many distinct ports with SYN present and ACK absent. FIN, NULL, and XMAS indicators require at least three matching events across three ports. The low-and-slow heuristic requires eight distinct ports from one source to one destination over at least five minutes. These are configurable in the Python detection function, not yet exposed as operator settings. A single event does not create an alert.
 
 Severity and confidence are simple deterministic heuristics based primarily on observed port count; they are not calibrated risk probabilities. FIN/NULL/XMAS classification is impossible when a sensor omits TCP flags. A Zeek connection summary is not a packet capture and must not be interpreted as proof of individual packet flags. The included UFW parser supports syslog lines containing `SRC`, `DST`, and optional port/protocol fields; it is not a general parser for all firewall products.
 
@@ -97,6 +97,7 @@ Example with the included fixture: select **Log ingestion**, choose **Zeek conn.
 ## Repository Map
 
 - `backend/app/`: API, SQLite models, event schema, parsers, generator, and detections.
+- `requirements.txt` and `requirements.lock`: supported Python ranges and pinned local environment dependencies.
 - `app/`: Next.js dashboard and visual system.
 - `tests/`: backend unit and API integration tests.
 - `port_scan_detection_lab/`: original sample logs and SIEM reference material; those SIEM artifacts are not connected to a live integration.
