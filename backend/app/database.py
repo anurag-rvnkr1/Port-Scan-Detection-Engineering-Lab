@@ -9,6 +9,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
 DATABASE_URL = os.getenv("LAB_DATABASE_URL", "sqlite:///./data/soc_lab.db")
+_MIGRATIONS_SETTING = os.getenv("LAB_USE_MIGRATIONS", "false").strip().lower()
+if _MIGRATIONS_SETTING not in {"0", "1", "false", "true", "no", "yes"}:
+    raise RuntimeError("LAB_USE_MIGRATIONS must be true or false")
+USE_DATABASE_MIGRATIONS = _MIGRATIONS_SETTING in {"1", "true", "yes"}
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
 elif DATABASE_URL.startswith("postgresql://"):
@@ -97,4 +101,5 @@ class AuthSessionRow(Base):
 
 
 def create_tables() -> None:
-    Base.metadata.create_all(bind=engine)
+    if not USE_DATABASE_MIGRATIONS:
+        Base.metadata.create_all(bind=engine)

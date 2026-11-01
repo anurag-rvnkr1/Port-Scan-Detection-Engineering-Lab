@@ -1,0 +1,30 @@
+FROM node:20-alpine AS dependencies
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=dependencies /app/node_modules ./node_modules
+COPY . .
+ARG NEXT_PUBLIC_API_BASE_URL=""
+ARG API_PROXY_TARGET=""
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL \
+    API_PROXY_TARGET=$API_PROXY_TARGET \
+    NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM node:20-alpine AS runner
+ENV NODE_ENV=production \
+    HOSTNAME=0.0.0.0 \
+    PORT=3000 \
+    NEXT_TELEMETRY_DISABLED=1
+WORKDIR /app
+RUN addgroup --system --gid 10001 sentinelsoc \
+    && adduser --system --uid 10001 --ingroup sentinelsoc sentinelsoc
+COPY --from=builder --chown=sentinelsoc:sentinelsoc /app/.next/standalone ./
+COPY --from=builder --chown=sentinelsoc:sentinelsoc /app/.next/static ./.next/static
+COPY --from=builder --chown=sentinelsoc:sentinelsoc /app/public ./public
+USER sentinelsoc
+EXPOSE 3000
+CMD ["node", "server.js"]

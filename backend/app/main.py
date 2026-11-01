@@ -11,6 +11,7 @@ import secrets
 import threading
 import time
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
@@ -58,13 +59,42 @@ try:
     _API_HOST_IS_LOOPBACK = _API_HOST == "localhost" or ipaddress.ip_address(_API_HOST).is_loopback
 except ValueError:
     _API_HOST_IS_LOOPBACK = False
-if not _API_HOST_IS_LOOPBACK and not AUTH_COOKIE_SECURE:
-    raise RuntimeError("Set LAB_COOKIE_SECURE=true when LAB_HOST is not loopback")
 ALLOWED_ORIGINS = tuple(
     origin.strip()
     for origin in os.getenv("LAB_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
     if origin.strip()
 )
+_TRUST_PROXY_SETTING = os.getenv("LAB_TRUSTED_LOOPBACK_PROXY", "false").strip().lower()
+if _TRUST_PROXY_SETTING not in {"0", "1", "false", "true", "no", "yes"}:
+    raise RuntimeError("LAB_TRUSTED_LOOPBACK_PROXY must be true or false")
+TRUSTED_LOOPBACK_PROXY = _TRUST_PROXY_SETTING in {"1", "true", "yes"}
+
+
+def _is_loopback_http_origin(origin: str) -> bool:
+    try:
+        parsed = urlsplit(origin)
+        hostname = (parsed.hostname or "").lower()
+        return (
+            parsed.scheme == "http"
+            and (hostname == "localhost" or ipaddress.ip_address(hostname).is_loopback)
+            and parsed.path in {"", "/"}
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        return False
+
+
+if not _API_HOST_IS_LOOPBACK and not AUTH_COOKIE_SECURE:
+    if not TRUSTED_LOOPBACK_PROXY or not ALLOWED_ORIGINS or not all(
+        _is_loopback_http_origin(origin) for origin in ALLOWED_ORIGINS
+    ):
+        raise RuntimeError(
+            "Non-loopback HTTP cookies require LAB_TRUSTED_LOOPBACK_PROXY=true and loopback-only CORS origins, "
+            "or set LAB_COOKIE_SECURE=true"
+        )
 
 
 class SlidingWindowLimiter:
