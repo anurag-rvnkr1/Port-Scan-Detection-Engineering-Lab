@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint, create_engine
+from sqlalchemy import BigInteger, JSON, DateTime, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -132,6 +132,25 @@ class NmapScanRow(Base):
     initiated_by: Mapped[str] = mapped_column(String(64), index=True)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(String(240), nullable=True)
+
+
+class SensorRow(Base):
+    __tablename__ = "sensors"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    sensor_type: Mapped[str] = mapped_column(String(16), index=True)
+    log_path: Mapped[str] = mapped_column(String(1024))
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    cursor_offset: Mapped[int] = mapped_column(BigInteger, default=0)
+    file_identity: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    pending_line: Mapped[str] = mapped_column(Text, default="")
+    zeek_header: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processed_records: Mapped[int] = mapped_column(Integer, default=0)
+    parse_error_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 def create_tables() -> None:

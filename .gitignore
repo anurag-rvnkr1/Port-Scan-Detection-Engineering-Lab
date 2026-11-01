@@ -9,6 +9,7 @@ node_modules/
 .next-*/
 .env
 .env*.local
+/sensor-logs/
 .DS_Store
 .venv/
 __pycache__/

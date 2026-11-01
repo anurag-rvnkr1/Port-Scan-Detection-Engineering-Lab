@@ -30,6 +30,7 @@ services:
       LAB_TRUSTED_LOOPBACK_PROXY: "true"
       LAB_CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}
       LAB_NMAP_ALLOWED_CIDRS: ${LAB_NMAP_ALLOWED_CIDRS:-}
+      LAB_SENSOR_LOG_DIRS: /var/lib/sentinelsoc/sensors
       SENTINELSOC_SPLUNK_HEC_URL: ${SENTINELSOC_SPLUNK_HEC_URL:-}
       SENTINELSOC_SPLUNK_HEC_TOKEN: ${SENTINELSOC_SPLUNK_HEC_TOKEN:-}
       SENTINELSOC_ELASTICSEARCH_URL: ${SENTINELSOC_ELASTICSEARCH_URL:-}
@@ -41,6 +42,7 @@ services:
         condition: service_healthy
     volumes:
       - backend-data:/app/data
+      - ${LAB_SENSOR_LOG_MOUNT:-./sensor-logs}:/var/lib/sentinelsoc/sensors:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
       interval: 10s

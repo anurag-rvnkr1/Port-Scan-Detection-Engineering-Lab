@@ -108,13 +108,18 @@ def _suricata_flags(value: object) -> object:
     return sorted(name for bit, name in names.items() if mask & bit)
 
 
-def parse_log(content: str, format_name: str, source_file: str = "upload") -> tuple[list[NetworkEvent], list[dict]]:
+def parse_log(
+    content: str,
+    format_name: str,
+    source_file: str = "upload",
+    line_offset: int = 0,
+) -> tuple[list[NetworkEvent], list[dict]]:
     format_name = format_name.lower()
     events: list[NetworkEvent] = []
     errors: list[dict] = []
     zeek_fields: list[str] | None = None
 
-    for line_number, raw_line in enumerate(content.splitlines(), start=1):
+    for line_number, raw_line in enumerate(content.splitlines(), start=line_offset + 1):
         line = raw_line.strip()
         if not line:
             continue

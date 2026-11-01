@@ -1,9 +1,14 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 
 const databaseUrl = 'sqlite:////tmp/sentinelsoc-e2e.db'
+const sensorDirectory = mkdtempSync(join(tmpdir(), 'sentinelsoc-e2e-sensors-'))
 process.env.E2E_DATABASE_URL = databaseUrl
 process.env.E2E_ADMIN_USERNAME = 'e2e-admin'
 process.env.E2E_ADMIN_PASSWORD = 'e2e-test-password-2026'
+process.env.E2E_SENSOR_DIRECTORY = sensorDirectory
 
 export default defineConfig({
   testDir: './e2e',
@@ -27,6 +32,8 @@ export default defineConfig({
         LAB_PORT: '18000',
         LAB_DATABASE_URL: databaseUrl,
         LAB_CORS_ORIGINS: 'http://127.0.0.1:13000',
+        LAB_NMAP_ALLOWED_CIDRS: '',
+        LAB_SENSOR_LOG_DIRS: sensorDirectory,
       },
     },
     {

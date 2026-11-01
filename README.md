@@ -19,7 +19,7 @@ An offline-first network telemetry normalization and port-scan detection lab. Th
 - Optionally deliver normalized events and detections to Splunk HEC and Elasticsearch using environment-configured clients; delivery status is persisted without exposing credentials.
 - Explore the local REST API through OpenAPI at `/docs`.
 
-Synthetic events are visibly labeled and never sent to the network. The application does not capture live traffic. Restricted, synchronous Nmap execution and optional SIEM delivery are implemented but only locally/mocked verified; live sensors and production deployment are not implemented.
+Synthetic events are visibly labeled and never sent to the network. The application does not capture live traffic or launch Zeek/Suricata. Restricted, synchronous Nmap execution, tailing of existing Zeek/Suricata log files, and optional SIEM delivery are implemented but locally/mocked verified; production deployment is not implemented.
 
 ## Architecture
 
@@ -79,6 +79,12 @@ The development server uses its own `.next-dev` output so a production build doe
 The scanner is disabled unless Nmap is installed and `LAB_NMAP_ALLOWED_CIDRS` explicitly lists private or loopback lab networks that you are authorized to test. Docker includes the Nmap binary, but the example environment leaves its target allowlist empty. For a local lab, add only that lab's private CIDR to `.env`, for example `LAB_NMAP_ALLOWED_CIDRS=192.168.56.0/24`, and restart the API. Scans accept one IP literal (not a hostname or arbitrary command-line options), require an authenticated administrator and explicit authorization confirmation, and are limited to one concurrent request, three per administrator per hour, at most 256 selected ports, and a 5–300 second timeout.
 
 Use the admin-only `/api/nmap/status` and `/api/scans` routes in the interactive API documentation to check availability, submit an authorized scan, and review persisted results. The service uses fixed Nmap argument arrays and parses XML output; it never invokes a shell. SYN scans may require operating-system privileges unavailable to the non-root Docker API. The current execution path is synchronous: durable background jobs, cancellation, and a dashboard scan-management page are not implemented. Automated tests use mocked Nmap output; no live scan was run as part of validation.
+
+### Zeek and Suricata log tailers
+
+The backend can tail existing Zeek TSV or Suricata EVE JSONL log files as they grow. It does not launch Zeek/Suricata processes or capture packets. In Compose, copy logs into `./sensor-logs` (or configure `LAB_SENSOR_LOG_MOUNT` to another host directory); that directory is mounted read-only and is the only allowed log root. Admins register a sensor with `POST /api/sensors`, then use `POST /api/sensors/{sensor_id}/start` or `/stop`. `GET /api/sensors` reports ingestion health and counters. For local Python, set `LAB_SENSOR_LOG_DIRS` to explicitly authorized directories before starting the API.
+
+Tailers process up to 256 KiB and 250 records per poll, preserve partial lines and Zeek headers across reads, and persist their cursor and health state. Configure at most 16 sensors, with at most four tailing concurrently. An API restart resumes sensors that were still marked running, but multiple API replicas are unsupported because worker leases are not distributed. Tests use local fixture files; no live Zeek or Suricata process has been verified.
 
 ### Local Docker Compose
 
@@ -152,12 +158,13 @@ Example with the included fixture: select **Log ingestion**, choose **Zeek conn.
 - `POST /api/integrations/deliveries/{delivery_id}/retry`: admin-only retry for a persisted failed event/alert batch.
 - `GET /api/nmap/status`: admin-only scanner readiness and opt-in target configuration status.
 - `POST /api/scans`, `GET /api/scans`, and `GET /api/scans/{scan_id}`: administrator-triggered, allowlisted Nmap scans and persisted history. See [Authorized Nmap scans](#authorized-nmap-scans) for strict scope and limits.
+- `GET /api/sensors`: authenticated sensor status/counters; `POST /api/sensors` and `POST /api/sensors/{sensor_id}/{start|stop}`: admin-only registration and control of authorized existing Zeek/Suricata log tailers.
 
-Database migrations are managed with Alembic. Apply the initial migration with `.venv/bin/alembic upgrade head`; local SQLite also retains its automatic table initialization. The initial migration was tested on SQLite and PostgreSQL 17, and API database health was verified against the temporary PostgreSQL instance; production deployment is still pending.
+Database migrations are managed with Alembic. Apply the schema with `.venv/bin/alembic upgrade head`; local SQLite also retains its automatic table initialization. The migrations were tested on SQLite and PostgreSQL 17, and API database health was verified against the temporary PostgreSQL instance; production deployment is still pending.
 
 ## Status and limitations
 
-This is an offline-first detection engineering prototype, not a production SOC platform. Features verified in this checkout and the still-pending production work are tracked in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md). PostgreSQL migrations and a loopback-only Docker demo stack are locally verified; remote CI execution and production deployment are pending. Nmap is restricted and synchronous; live packet capture and sensors are not implemented, and SIEM delivery is mock-verified only. One browser-driven analyst workflow passes, but not all pages or roles have E2E coverage. Keep the API private; the Compose stack publishes only the frontend on loopback. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) and [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md).
+This is an offline-first detection engineering prototype, not a production SOC platform. Features verified in this checkout and the still-pending production work are tracked in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md). PostgreSQL migrations and a loopback-only Docker demo stack are locally verified; remote CI execution and production deployment are pending. Nmap is restricted and synchronous; live packet capture and sensor process provisioning are not implemented. Existing Zeek/Suricata log tailing is locally tested, and SIEM delivery is mock-verified only. One browser-driven analyst workflow passes, but not all pages or roles have E2E coverage. Keep the API private; the Compose stack publishes only the frontend on loopback. See [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) and [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md).
 
 ## Repository Map
 
@@ -175,7 +182,7 @@ This is an offline-first detection engineering prototype, not a production SOC p
 ## Current Limitations
 
 - Splunk HEC and Elasticsearch delivery clients use bounded retries, TLS verification, batch limits, duplicate suppression, persisted outcomes, and secret-safe status. Contract tests mock both APIs; live ingestion/search has not been verified. There is no settings UI, delivery worker, automatic failed-delivery retry, or remote search workflow yet.
-- Nmap execution is allowlist-restricted but synchronous, with no background queue, cancellation, or scan-management UI. No sensor process, live packet capture, distributed or multi-technique correlation, or operator-facing detection-rule UI exists. Source-IP/CIDR exclusions and threshold are startup environment settings only. The TCP Connect and low-and-slow heuristics remain simple threshold-based rules.
+- Nmap execution is allowlist-restricted but synchronous, with no background queue, cancellation, or scan-management UI. Existing Zeek and Suricata logs can be tailed, but sensor process management and live packet capture are absent. Sensor polling is process-local, so multiple API replicas are unsupported. No distributed or multi-technique correlation or operator-facing detection-rule UI exists. Source-IP/CIDR exclusions and threshold are startup environment settings only. The TCP Connect and low-and-slow heuristics remain simple threshold-based rules.
 - Authentication, backend role checks, audit identity, bounded ingestion, PDF reports, optional SIEM delivery, and one Playwright workflow are covered by local checks; full teams, complete E2E coverage, remote CI execution, and production security validation remain pending.
 - PostgreSQL migrations are tested on SQLite and PostgreSQL 17; the local Docker Compose application stack is smoke-tested. Redis/background jobs, container scanning, and production deployment are pending.
 - Dashboard charts summarize the latest 500 records loaded by the UI. The API summary counts stored events, but filtering, sorting, and server-side time-window queries remain limited.

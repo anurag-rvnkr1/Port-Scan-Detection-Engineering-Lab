@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 from backend.app import main
 from backend.app.auth import create_user
 from backend.app.database import Base
+from backend.app.sensors import SensorManager
 
 
 @pytest.fixture
@@ -34,6 +35,7 @@ def api_client(monkeypatch) -> Iterator[TestClient]:
         create_user(session, "analyst-1", "test-password-for-analyst-123", "soc_analyst")
         session.commit()
     monkeypatch.setattr(main, "request_limiter", main.SlidingWindowLimiter())
+    monkeypatch.setattr(main, "sensor_manager", SensorManager(test_sessions, main._persist))
     monkeypatch.setattr(main, "create_tables", lambda: None)
     main.app.dependency_overrides[main.get_db] = override_db
     try:

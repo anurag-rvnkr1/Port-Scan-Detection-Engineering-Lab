@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 from backend.app import integrations, main
 from backend.app.auth import create_user
 from backend.app.database import Base, IntegrationDeliveryRow
+from backend.app.sensors import SensorManager
 
 
 class MockResponse:
@@ -65,6 +66,7 @@ def api_client(monkeypatch) -> Iterator[TestClient]:
         create_user(session, "siem-admin", "test-password-for-siem-admin", "super_admin")
         session.commit()
     monkeypatch.setattr(main, "request_limiter", main.SlidingWindowLimiter())
+    monkeypatch.setattr(main, "sensor_manager", SensorManager(factory, main._persist))
     main.app.dependency_overrides[main.get_db] = override_db
     try:
         with TestClient(main.app) as client:

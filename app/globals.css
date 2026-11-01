@@ -306,6 +306,39 @@ tbody tr:hover { background: #20241d; }
 .filter-row { display: flex; justify-content: space-between; align-items: center; padding: 0 17px 12px; color: #899081; font-size: 10px; }
 .filter-row label { display: flex; align-items: center; gap: 8px; }
 .filter-row select,.form-label select { min-height: 30px; padding: 0 8px; border: 1px solid #383e34; border-radius: 4px; color: #d7ddce; background: #171a15; }
+.monitoring-layout { display: grid; grid-template-columns: minmax(0,1.45fr) minmax(270px,.8fr); gap: 14px; align-items: start; }
+.operation-panel,.operation-info { min-width: 0; padding: 19px; }
+.operation-panel > .panel-heading { margin-bottom: 11px; }
+.operation-panel .ingestion-intro { margin-bottom: 16px; }
+.operation-form { display: grid; grid-template-columns: minmax(120px,.8fr) minmax(150px,1fr) minmax(180px,1.5fr) auto; align-items: end; gap: 12px; margin-bottom: 19px; }
+.operation-form .form-label { min-width: 0; }
+.operation-form input:not([type="checkbox"]),.operation-form select { width: 100%; min-width: 0; min-height: 34px; padding: 0 9px; border: 1px solid #383e34; border-radius: 4px; color: #d7ddce; background: #171a15; font-size: 10px; }
+.operation-form .button { min-height: 34px; white-space: nowrap; }
+.scan-form { grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; }
+.scan-form .button { justify-self: start; }
+.check-label { display: flex; align-items: center; gap: 8px; min-height: 34px; color: #aab19f; font-size: 10px; }
+.check-label input { accent-color: var(--soc-lime); }
+.authorization-confirm { grid-column: 1 / -1; }
+.button-compact { min-height: 26px !important; padding: 0 8px !important; font-size: 9px !important; }
+.operation-table { margin: 0 -19px -19px; }
+.operation-table td { vertical-align: middle; }
+.operation-info { background: linear-gradient(150deg,#1e2319,#181b16); }
+.operation-info h2 { margin: 13px 0; font-size: 13px; font-weight: 620; }
+.operation-info ul { display: grid; gap: 13px; margin: 0; padding: 0; list-style: none; }
+.operation-info li strong,.operation-info li span { display: block; }
+.operation-info li strong { color: #dce1d4; font-size: 10px; }
+.operation-info li span { margin-top: 4px; color: #899081; font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
+.operation-info .info-warning { margin-top: 18px; }
+.scan-readiness { display: flex; align-items: center; gap: 8px; color: #dce1d4; font-size: 11px; text-transform: capitalize; }
+.scan-readiness .sensor-pulse { position: static; display: inline-block; flex: 0 0 7px; }
+.scan-readiness .pulse-muted { background: #757b6e; box-shadow: none; }
+.history-panel { grid-column: 1 / -1; padding: 17px 0 0; overflow: hidden; }
+.history-panel > .panel-heading { padding: 0 17px; }
+.history-panel .button { min-height: 30px; }
+.scan-result { margin: 0 17px 17px; padding: 13px; border: 1px solid #30362c; border-radius: 4px; background: #1b1f19; }
+.scan-result-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; color: #dce1d4; font-size: 10px; }
+.scan-result > p { color: #a1a897; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.scan-result .table-scroll { margin-top: 10px; }
 .ingestion-layout { display: grid; grid-template-columns: minmax(0,1.45fr) minmax(270px,.8fr); gap: 14px; align-items: start; }
 .ingestion-panel,.ingestion-info { padding: 19px; }
 .ingestion-intro { max-width: 650px; margin: 0 0 20px; color: #9aa190; font-size: 11px; line-height: 1.7; }
@@ -353,6 +386,8 @@ tbody tr:hover { background: #20241d; }
   .page-content { padding-right: 22px; padding-left: 22px; }
   .topbar { padding-right: 22px; padding-left: 22px; }
   .overview-grid { grid-template-columns: minmax(0,1.25fr) minmax(275px,1fr); }
+  .operation-form { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .operation-path { grid-column: 1 / -1; }
   .heading-actions { gap: 10px; }
   .updated-label { display: none; }
 }
@@ -381,6 +416,10 @@ tbody tr:hover { background: #20241d; }
   .chart-wrap { height: 156px; }
   .page-footer { flex-direction: column; gap: 7px; }
   .ingestion-layout { grid-template-columns: minmax(0,1fr); }
+  .monitoring-layout { grid-template-columns: minmax(0,1fr); }
+  .history-panel { grid-column: 1; }
+  .operation-form { grid-template-columns: minmax(0,1fr); }
+  .operation-path,.authorization-confirm { grid-column: 1; }
   .toolbar-caption { display: none; }
 }
 

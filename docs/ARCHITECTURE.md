@@ -7,8 +7,8 @@ flowchart LR
   Browser[Next.js dashboard] -->|same-origin /api| BFF[Next.js API proxy]
   BFF -->|internal HTTP JSON| API[FastAPI]
   Synthetic[Synthetic generator] --> Schema[Pydantic canonical event]
-  Zeek[Offline Zeek TSV] --> Parser[Format parsers]
-  Suricata[Offline Suricata EVE JSONL] --> Parser
+  Zeek[Zeek TSV log file] --> Parser[Format parsers / bounded tailers]
+  Suricata[Suricata EVE JSONL file] --> Parser
   Firewall[Supported UFW syslog] --> Parser
   Parser --> Schema
   Schema --> Detection[Explainable scan heuristics]
@@ -19,13 +19,13 @@ flowchart LR
   Persistence --> Reports[ReportLab PDF / CSV]
 ```
 
-The application is a synchronous prototype. SQLite local development continues to create missing tables with SQLAlchemy `create_all`; Docker Compose uses PostgreSQL 17 and runs Alembic before starting the API. PostgreSQL URLs are normalized to the psycopg 3 driver. The local Compose stack was built and smoke-tested; this is not production deployment support. Its API and database share an internal network, while the frontend is the only service published and binds to host loopback. Authenticated report requests aggregate persisted records and generate PDFs in the API process.
+API requests execute synchronously; configured sensor tailers run in bounded in-process threads. SQLite local development continues to create missing tables with SQLAlchemy `create_all`; Docker Compose uses PostgreSQL 17 and runs Alembic before starting the API. PostgreSQL URLs are normalized to the psycopg 3 driver. The local Compose stack was built and smoke-tested; this is not production deployment support. Its API and database share an internal network, while the frontend is the only service published and binds to host loopback. Authenticated report requests aggregate persisted records and generate PDFs in the API process.
 
 When SIEM environment settings are present, newly persisted event batches and generated alert batches are delivered synchronously from the ingest request. Batches are capped at 250 records; successful batch IDs are deduplicated and all outcomes are stored in `integration_deliveries`. Failures do not roll back local event storage. Administrators can retry persisted failed event/alert batches explicitly. A durable background worker, scheduled retries, and delivery backpressure are still needed before larger deployments.
 
 ## Event Flow
 
-1. Demo generation or a bounded UTF-8 upload produces input records.
+1. Demo generation, bounded UTF-8 uploads, or an authorized in-process file tailer produces input records.
 2. Pydantic normalizes IP addresses, timestamps, protocol names, and available TCP flags; parser records retain the original input.
 3. New event IDs are persisted once. Detection considers new events plus same-source history up to one hour before the earliest new event.
 4. Detected alert evidence refers to event IDs. Overlapping evidence merges into existing alerts while preserving their status and assignment.
@@ -42,8 +42,12 @@ When SIEM environment settings are present, newly persisted event batches and ge
 | `users` | Local account identifier, scrypt password hash, role, active state, and creation timestamp. |
 | `auth_sessions` | Hashes of opaque session and CSRF tokens, owning user, and expiry. |
 | `integration_deliveries` | Batch IDs, remote delivery status/attempt count, safe error summary, and event/alert identifiers. No SIEM credentials or remote response bodies are stored. |
+| `nmap_scans` | Authorized single-target scan parameters, status, result, initiating user, timestamps, and safe error summary. |
+| `sensors` | Allowlisted Zeek/Suricata log path, worker state, byte cursor/file identity, bounded partial line/header, and health counters. |
 
-The initial Alembic revision creates these tables and indexes. Foreign-key relationships, normalized team/permission entities, retention jobs, and multi-tenant isolation are not implemented.
+The Alembic revision chain creates these tables and indexes. Foreign-key relationships, normalized team/permission entities, retention jobs, and multi-tenant isolation are not implemented.
+
+Sensor tailers poll regular files under explicitly configured roots and persist the byte cursor plus file identity so new appended data can be processed after a restart. Polling is bounded to 256 KiB and 250 records per poll. Workers run in the API process and require a single API instance; source sensor daemons and packet capture are external and not managed by the platform.
 
 ## Reports
 
@@ -57,4 +61,4 @@ Implemented rules and limitations are tracked in [FEATURE_STATUS.md](./FEATURE_S
 
 ## Target Architecture Not Yet Present
 
-Redis/Celery, WebSockets/SSE, live sensors, durable/cancellable Nmap jobs, SIEM search/health workflows, and production TLS, backup, monitoring, and scaling controls are future work. A synchronous Nmap API is restricted to explicit private/loopback CIDRs. Offline PCAP parsing, PostgreSQL/Alembic, local Docker Compose, SIEM delivery, and CI configuration exist, but only the scoped checks described in [FEATURE_STATUS.md](./FEATURE_STATUS.md) are verified.
+Redis/Celery, WebSockets/SSE, live packet capture, sensor process provisioning, durable/cancellable Nmap jobs, SIEM search/health workflows, and production TLS, backup, monitoring, and scaling controls are future work. Existing Zeek TSV and Suricata EVE logs can be tailed by bounded in-process sensor workers from explicitly allowed directories. A synchronous Nmap API is restricted to explicit private/loopback CIDRs. Offline PCAP parsing, PostgreSQL/Alembic, local Docker Compose, SIEM delivery, and CI configuration exist, but only the scoped checks described in [FEATURE_STATUS.md](./FEATURE_STATUS.md) are verified.

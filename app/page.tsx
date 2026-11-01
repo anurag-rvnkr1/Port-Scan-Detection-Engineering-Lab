@@ -16,6 +16,7 @@ import {
   LogOut,
   Network,
   Radar,
+  Radio,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -36,7 +37,7 @@ import {
 } from 'recharts'
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from 'react'
 
-type View = 'overview' | 'events' | 'alerts' | 'incidents' | 'ingestion' | 'analysts'
+type View = 'overview' | 'events' | 'alerts' | 'incidents' | 'monitoring' | 'scans' | 'ingestion' | 'analysts'
 type NetworkEvent = {
   event_id: string
   timestamp: string
@@ -88,6 +89,31 @@ type Incident = {
   updated_at: string
 }
 type Analyst = { username: string; role: string }
+type Sensor = {
+  sensor_id: string
+  name: string
+  sensor_type: 'zeek' | 'suricata'
+  status: string
+  processed_records: number
+  parse_error_count: number
+  last_error: string | null
+  updated_at: string
+}
+type NmapScan = {
+  scan_id: string
+  target: string
+  profile: string
+  scan_type: string
+  ports: number[]
+  service_detection: boolean
+  status: string
+  started_at: string
+  completed_at: string | null
+  initiated_by: string
+  error: string | null
+  result?: { host_status: string; open_ports: { protocol: string; port: number; service: string | null; product: string | null; version: string | null }[] } | null
+}
+type NmapStatus = { available: boolean; enabled: boolean; authorized_network_count: number; status: string }
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000').replace(/\/$/, '')
 const NAV_ITEMS: { id: View; label: string; icon: typeof Radar }[] = [
@@ -95,6 +121,8 @@ const NAV_ITEMS: { id: View; label: string; icon: typeof Radar }[] = [
   { id: 'events', label: 'Network events', icon: Network },
   { id: 'alerts', label: 'Security alerts', icon: ShieldAlert },
   { id: 'incidents', label: 'Incidents', icon: Siren },
+  { id: 'monitoring', label: 'Network monitoring', icon: Radio },
+  { id: 'scans', label: 'Nmap scans', icon: Search },
   { id: 'ingestion', label: 'Log ingestion', icon: FileUp },
   { id: 'analysts', label: 'Analyst management', icon: UsersRound },
 ]
@@ -129,6 +157,10 @@ export default function Home() {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [analysts, setAnalysts] = useState<Analyst[]>([])
+  const [sensors, setSensors] = useState<Sensor[]>([])
+  const [scans, setScans] = useState<NmapScan[]>([])
+  const [nmapStatus, setNmapStatus] = useState<NmapStatus | null>(null)
+  const [selectedScan, setSelectedScan] = useState<NmapScan | null>(null)
   const [newUsername, setNewUsername] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [newRole, setNewRole] = useState<'soc_analyst' | 'read_only_viewer'>('soc_analyst')
@@ -151,6 +183,16 @@ export default function Home() {
   const [ingestFile, setIngestFile] = useState<File | null>(null)
   const [ingestMessage, setIngestMessage] = useState('')
   const [busyAction, setBusyAction] = useState(false)
+  const [sensorName, setSensorName] = useState('')
+  const [sensorType, setSensorType] = useState<'zeek' | 'suricata'>('suricata')
+  const [sensorPath, setSensorPath] = useState('')
+  const [scanTarget, setScanTarget] = useState('')
+  const [scanProfile, setScanProfile] = useState<'common_ports' | 'selected_ports' | 'host_discovery'>('common_ports')
+  const [scanType, setScanType] = useState<'tcp_connect' | 'syn'>('tcp_connect')
+  const [scanPorts, setScanPorts] = useState('')
+  const [scanServices, setScanServices] = useState(false)
+  const [scanConfirmed, setScanConfirmed] = useState(false)
+  const canManageOperations = ['super_admin', 'security_admin'].includes(identity?.role ?? '')
 
   const apiFetch = useCallback(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const headers = new Headers(init.headers)
@@ -169,25 +211,31 @@ export default function Home() {
     if (quiet) setRefreshing(true)
     else setLoading(true)
     try {
-      const [summaryResponse, eventResponse, alertResponse, incidentResponse] = await Promise.all([
+      const [summaryResponse, eventResponse, alertResponse, incidentResponse, sensorResponse, scanResponse] = await Promise.all([
         apiFetch(`${API_BASE}/api/dashboard/summary`, { cache: 'no-store' }),
         apiFetch(`${API_BASE}/api/events?limit=500`, { cache: 'no-store' }),
         apiFetch(`${API_BASE}/api/alerts?limit=500`, { cache: 'no-store' }),
         apiFetch(`${API_BASE}/api/incidents?limit=100`, { cache: 'no-store' }),
+        apiFetch(`${API_BASE}/api/sensors`, { cache: 'no-store' }),
+        apiFetch(`${API_BASE}/api/scans?limit=50`, { cache: 'no-store' }),
       ])
-      if (![summaryResponse, eventResponse, alertResponse, incidentResponse].every((response) => response.ok)) {
+      if (![summaryResponse, eventResponse, alertResponse, incidentResponse, sensorResponse, scanResponse].every((response) => response.ok)) {
         throw new Error('The local API returned an unsuccessful response.')
       }
-      const [nextSummary, eventPayload, alertPayload, incidentPayload] = await Promise.all([
+      const [nextSummary, eventPayload, alertPayload, incidentPayload, sensorPayload, scanPayload] = await Promise.all([
         summaryResponse.json(),
         eventResponse.json(),
         alertResponse.json(),
         incidentResponse.json(),
+        sensorResponse.json(),
+        scanResponse.json(),
       ])
       setSummary(nextSummary)
       setEvents(eventPayload.items)
       setAlerts(alertPayload.items)
       setIncidents(incidentPayload.items)
+      setSensors(sensorPayload.items)
+      setScans(scanPayload.items)
       setError('')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to load SOC data.')
@@ -196,6 +244,24 @@ export default function Home() {
       setRefreshing(false)
     }
   }, [apiFetch])
+
+  useEffect(() => {
+    if (view !== 'scans' || !identity || !canManageOperations) return
+    let active = true
+    const timer = window.setTimeout(() => {
+      void apiFetch(`${API_BASE}/api/nmap/status`, { cache: 'no-store' }).then(async (response) => {
+        const result = await response.json()
+        if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Unable to load Nmap status.')
+        if (active) setNmapStatus(result)
+      }).catch((reason) => {
+        if (active) setIngestMessage(`Nmap status failed: ${reason instanceof Error ? reason.message : 'Unable to load Nmap status.'}`)
+      })
+    }, 0)
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
+  }, [apiFetch, canManageOperations, identity, view])
 
   useEffect(() => {
     let active = true
@@ -281,6 +347,10 @@ export default function Home() {
       setEvents([])
       setAlerts([])
       setIncidents([])
+      setSensors([])
+      setScans([])
+      setNmapStatus(null)
+      setSelectedScan(null)
     } catch (reason) {
       setAuthMessage(reason instanceof Error ? reason.message : 'Logout failed.')
     }
@@ -308,6 +378,105 @@ export default function Home() {
       setIngestMessage(reason instanceof Error ? reason.message : 'Account creation failed.')
     } finally {
       setBusyAction(false)
+    }
+  }
+
+  async function createSensor(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBusyAction(true)
+    setIngestMessage('')
+    try {
+      const response = await apiFetch(`${API_BASE}/api/sensors`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: sensorName, sensor_type: sensorType, log_path: sensorPath }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Sensor registration failed.')
+      setSensorName('')
+      setSensorPath('')
+      setIngestMessage(`Registered ${result.sensor_type} sensor ${result.name}.`)
+      await refresh(true)
+    } catch (reason) {
+      setIngestMessage(`Sensor registration failed: ${reason instanceof Error ? reason.message : 'Unexpected API error.'}`)
+    } finally {
+      setBusyAction(false)
+    }
+  }
+
+  async function setSensorRunning(sensor: Sensor, action: 'start' | 'stop') {
+    setBusyAction(true)
+    setIngestMessage('')
+    try {
+      const response = await apiFetch(`${API_BASE}/api/sensors/${sensor.sensor_id}/${action}`, { method: 'POST' })
+      const result = await response.json()
+      if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : `Sensor ${action} failed.`)
+      setIngestMessage(`${result.name} sensor is ${result.status}.`)
+      await refresh(true)
+    } catch (reason) {
+      setIngestMessage(`Sensor ${action} failed: ${reason instanceof Error ? reason.message : 'Unexpected API error.'}`)
+    } finally {
+      setBusyAction(false)
+    }
+  }
+
+  async function submitNmapScan(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!scanConfirmed) {
+      setIngestMessage('Confirm that the target is authorized before starting a scan.')
+      return
+    }
+    let ports: number[] | undefined
+    if (scanProfile === 'selected_ports') {
+      const rawPorts = scanPorts.split(',').map((port) => port.trim())
+      if (!rawPorts.length || rawPorts.some((port) => !/^\d+$/.test(port))) {
+        setIngestMessage('Enter selected ports as comma-separated integers from 1 to 65535.')
+        return
+      }
+      ports = rawPorts.map(Number)
+      if (ports.some((port) => port < 1 || port > 65535) || new Set(ports).size !== ports.length || ports.length > 256) {
+        setIngestMessage('Selected ports must be unique values from 1 to 65535 (maximum 256).')
+        return
+      }
+    }
+    setBusyAction(true)
+    setIngestMessage('')
+    try {
+      const response = await apiFetch(`${API_BASE}/api/scans`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target: scanTarget.trim(),
+          profile: scanProfile,
+          scan_type: scanProfile === 'host_discovery' ? 'tcp_connect' : scanType,
+          ...(ports ? { ports } : {}),
+          service_detection: scanProfile !== 'host_discovery' && scanServices,
+          timeout_seconds: 60,
+          confirm_authorized: true,
+        }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Nmap scan failed.')
+      setScanConfirmed(false)
+      setSelectedScan(result)
+      setIngestMessage(`Scan ${result.status} for ${result.target}; results have been saved to scan history.`)
+      await refresh(true)
+    } catch (reason) {
+      setIngestMessage(`Nmap scan failed: ${reason instanceof Error ? reason.message : 'Unexpected API error.'}`)
+    } finally {
+      setBusyAction(false)
+    }
+  }
+
+  async function openScan(scan: NmapScan) {
+    setSelectedScan(scan)
+    try {
+      const response = await apiFetch(`${API_BASE}/api/scans/${scan.scan_id}`, { cache: 'no-store' })
+      const result = await response.json()
+      if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Unable to load scan details.')
+      setSelectedScan(result)
+    } catch (reason) {
+      setIngestMessage(`Scan detail request failed: ${reason instanceof Error ? reason.message : 'Unexpected API error.'}`)
     }
   }
 
@@ -519,12 +688,12 @@ export default function Home() {
             <div>
               <div className="eyebrow"><span className="eyebrow-line" /> SECURITY OPERATIONS <span className="demo-chip">SIMULATED / OFFLINE DATA</span></div>
               <h1>{view === 'overview' ? 'Threat activity' : pageTitle}</h1>
-              <p>{view === 'overview' ? 'Network telemetry, normalized and analyzed locally.' : view === 'events' ? 'Normalized events stored in the local detection database.' : view === 'alerts' ? 'Explainable detections generated from ingested event evidence.' : view === 'incidents' ? 'Track local analyst response and resolution history.' : view === 'analysts' ? 'Manage local analyst accounts and assignments.' : 'Parse offline Zeek, Suricata, and supported UFW syslog files.'}</p>
+              <p>{view === 'overview' ? 'Network telemetry, normalized and analyzed locally.' : view === 'events' ? 'Normalized events stored in the local detection database.' : view === 'alerts' ? 'Explainable detections generated from ingested event evidence.' : view === 'incidents' ? 'Track local analyst response and resolution history.' : view === 'monitoring' ? 'Tail explicitly authorized Zeek and Suricata log files into the event pipeline.' : view === 'scans' ? 'Run confirmed scans only against configured private or loopback lab targets.' : view === 'analysts' ? 'Manage local analyst accounts and assignments.' : 'Parse offline Zeek, Suricata, and supported UFW syslog files.'}</p>
             </div>
             <div className="heading-actions">
               <span className="updated-label"><Clock3 size={14} /> AUTO-REFRESH 15S</span>
               <a className="button button-secondary" href={`${API_BASE}/api/reports/summary.pdf?period=weekly`}><FileText size={16} /> Weekly PDF</a>
-              {canWrite && <button className="button button-primary" onClick={view === 'ingestion' ? () => setIngestMessage('Choose a source format and file below.') : generateDemo} disabled={busyAction}>
+              {canWrite && view !== 'monitoring' && view !== 'scans' && <button className="button button-primary" onClick={view === 'ingestion' ? () => setIngestMessage('Choose a source format and file below.') : generateDemo} disabled={busyAction}>
                 <Activity size={16} /> Generate demo events
               </button>}
             </div>
@@ -603,6 +772,56 @@ export default function Home() {
             <div className="table-scroll"><table><thead><tr><th>INCIDENT</th><th>STATUS</th><th>ASSIGNED ANALYST</th><th>LINKED ALERTS</th><th>UPDATED</th><th>UPDATE STATUS</th></tr></thead><tbody>
               {incidents.map((incident) => <tr key={incident.incident_id}><td><strong className="table-primary">{incident.title}</strong><small className="table-secondary mono">{incident.incident_id}</small></td><td><span className="status-chip">{incident.status}</span></td><td><select disabled={!canWrite} aria-label={`Assign ${incident.title}`} value={incident.assigned_to ?? ''} onChange={(event) => void updateIncidentAssignee(incident.incident_id, event.target.value).catch((reason) => setIngestMessage(String(reason)))}><option value="">Unassigned</option>{analysts.map((analyst) => <option key={analyst.username} value={analyst.username}>{analyst.username}</option>)}</select></td><td>{incident.alert_ids.length}</td><td className="time-cell">{formatTime(incident.updated_at)}</td><td><select disabled={!canWrite} aria-label={`Update status for ${incident.title}`} value={incident.status} onChange={(event) => void updateIncidentStatus(incident.incident_id, event.target.value).catch((reason) => setIngestMessage(String(reason)))}>{['New', 'Investigating', 'Escalated', 'Resolved', 'Closed'].map((status) => <option key={status}>{status}</option>)}</select></td></tr>)}
             </tbody></table>{incidents.length === 0 && <EmptyState title="No incidents" detail="Create an incident from an alert after reviewing its evidence." />}</div>
+          </section>}
+
+          {view === 'monitoring' && <section className="monitoring-layout">
+            <div className="panel operation-panel">
+              <PanelHeading title="Authorized log tailers" eyebrow={`${sensors.length} REGISTERED SENSORS`} aside="Polls every 1 second" />
+              <p className="ingestion-intro">These tailers ingest existing Zeek conn.log or Suricata EVE JSON files. They do not launch sensor processes or capture packets.</p>
+              {canManageOperations && <form className="operation-form" onSubmit={(event) => void createSensor(event)}>
+                <label className="form-label">Sensor name<input required pattern="[A-Za-z0-9_-]+" maxLength={80} value={sensorName} onChange={(event) => setSensorName(event.target.value)} placeholder="lab-suricata" /></label>
+                <label className="form-label">Log format<select value={sensorType} onChange={(event) => setSensorType(event.target.value as 'zeek' | 'suricata')}><option value="suricata">Suricata EVE JSON</option><option value="zeek">Zeek conn.log</option></select></label>
+                <label className="form-label operation-path">Existing log file path<input required maxLength={1024} value={sensorPath} onChange={(event) => setSensorPath(event.target.value)} placeholder="/var/lib/sentinelsoc/sensors/eve.json" /></label>
+                <button className="button button-primary" type="submit" disabled={busyAction}>{busyAction ? <LoaderCircle className="spin" size={16} /> : <Radio size={16} />} Register sensor</button>
+              </form>}
+              {!canManageOperations && <div className="info-warning"><ShieldCheck size={15} /> Sensor registration and controls require an administrator role.</div>}
+              <div className="table-scroll operation-table"><table><thead><tr><th>SENSOR</th><th>FORMAT</th><th>STATUS</th><th>RECORDS</th><th>PARSE ERRORS</th><th>LAST UPDATE</th><th>CONTROL</th></tr></thead><tbody>
+                {sensors.map((sensor) => <tr key={sensor.sensor_id}><td><strong className="table-primary">{sensor.name}</strong>{sensor.last_error && <small className="table-secondary">{sensor.last_error}</small>}</td><td>{sensor.sensor_type}</td><td><span className="status-chip">{sensor.status}</span></td><td>{sensor.processed_records.toLocaleString()}</td><td>{sensor.parse_error_count.toLocaleString()}</td><td className="time-cell">{formatTime(sensor.updated_at)}</td><td>{canManageOperations && <button className="button button-subtle button-compact" disabled={busyAction || sensor.status === 'starting'} onClick={() => void setSensorRunning(sensor, sensor.status === 'running' ? 'stop' : 'start')}>{sensor.status === 'running' ? 'Stop' : 'Start'}</button>}</td></tr>)}
+              </tbody></table>{sensors.length === 0 && <EmptyState title="No sensors registered" detail="Register a readable log file inside an explicitly authorized sensor directory." />}</div>
+            </div>
+            <div className="panel operation-info">
+              <span className="info-icon"><ShieldCheck size={20} /></span><h2>Sensor boundaries</h2>
+              <ul><li><strong>Authorized directories</strong><span>Backend requires paths under LAB_SENSOR_LOG_DIRS. Compose mounts LAB_SENSOR_LOG_MOUNT read-only.</span></li><li><strong>Bounded processing</strong><span>At most 250 records and 256 KiB are read per poll; lines are capped at 64 KiB.</span></li><li><strong>Persisted pipeline</strong><span>Parsed telemetry enters the same normalized event, detection, and optional SIEM delivery path.</span></li></ul>
+              <div className="info-warning"><AlertTriangle size={15} /> File tailing only. Live interface discovery, packet capture, and sensor daemon management are not implemented.</div>
+            </div>
+          </section>}
+
+          {view === 'scans' && <section className="monitoring-layout">
+            <div className="panel operation-panel">
+              <PanelHeading title="Authorized Nmap scan" eyebrow="ADMINISTRATOR ACTION" />
+              <p className="ingestion-intro">Targets must be single private or loopback IP addresses inside configured authorized CIDRs. Every scan requires confirmation, is audited, and runs with a 60-second timeout.</p>
+              {canManageOperations ? <form className="operation-form scan-form" onSubmit={(event) => void submitNmapScan(event)}>
+                <label className="form-label">Target IP address<input required maxLength={45} value={scanTarget} onChange={(event) => setScanTarget(event.target.value)} placeholder="192.168.56.10" /></label>
+                <label className="form-label">Scan profile<select value={scanProfile} onChange={(event) => setScanProfile(event.target.value as typeof scanProfile)}><option value="common_ports">Common ports</option><option value="selected_ports">Selected ports</option><option value="host_discovery">Host discovery</option></select></label>
+                {scanProfile === 'selected_ports' && <label className="form-label">Ports (comma-separated)<input required maxLength={1400} value={scanPorts} onChange={(event) => setScanPorts(event.target.value)} placeholder="22,80,443" /></label>}
+                {scanProfile !== 'host_discovery' && <label className="form-label">TCP scan type<select value={scanType} onChange={(event) => setScanType(event.target.value as 'tcp_connect' | 'syn')}><option value="tcp_connect">TCP connect</option><option value="syn">SYN (requires privileges)</option></select></label>}
+                {scanProfile !== 'host_discovery' && <label className="check-label"><input type="checkbox" checked={scanServices} onChange={(event) => setScanServices(event.target.checked)} /> Detect service versions</label>}
+                <label className="check-label authorization-confirm"><input type="checkbox" required checked={scanConfirmed} onChange={(event) => setScanConfirmed(event.target.checked)} /> I am authorized to scan this target in my lab.</label>
+                <button className="button button-primary" type="submit" disabled={busyAction || !nmapStatus?.enabled || !canManageOperations}>{busyAction ? <LoaderCircle className="spin" size={16} /> : <Search size={16} />} Start scan</button>
+              </form> : <div className="info-warning"><ShieldCheck size={15} /> Active Nmap scans are restricted to security and super administrators.</div>}
+            </div>
+            <div className="panel operation-info">
+              <span className="info-icon"><Search size={20} /></span><h2>Nmap readiness</h2>
+              {canManageOperations ? <><p className="scan-readiness"><span className={`sensor-pulse ${nmapStatus?.enabled ? '' : 'pulse-muted'}`} />{nmapStatus ? nmapStatus.status.replaceAll('_', ' ') : 'Checking configuration…'}</p><ul><li><strong>Binary installed</strong><span>{nmapStatus ? (nmapStatus.available ? 'Yes' : 'No') : 'Checking'}</span></li><li><strong>Authorized lab networks</strong><span>{nmapStatus ? nmapStatus.authorized_network_count.toLocaleString() : 'Checking'}</span></li></ul></> : <p className="ingestion-intro">Read-only scan history is available. Configuration readiness is visible to administrators.</p>}
+              <div className="info-warning"><AlertTriangle size={15} /> Never scan public or third-party networks. The backend enforces the CIDR allowlist and uses fixed subprocess arguments without a shell.</div>
+            </div>
+            <div className="panel operation-panel history-panel">
+              <PanelHeading title="Scan history" eyebrow={`${scans.length} RECENT DATABASE RECORDS`} action={<button className="button button-subtle" onClick={() => void refresh(true)} disabled={refreshing}><RefreshCw size={14} /> Refresh</button>} />
+              <div className="table-scroll"><table><thead><tr><th>STARTED</th><th>TARGET</th><th>PROFILE</th><th>SCAN TYPE</th><th>STATUS</th><th>INITIATED BY</th><th>DETAILS</th></tr></thead><tbody>
+                {scans.map((scan) => <tr key={scan.scan_id}><td className="time-cell">{formatTime(scan.started_at)}</td><td className="mono">{scan.target}</td><td>{scan.profile.replaceAll('_', ' ')}</td><td>{scan.scan_type.replaceAll('_', ' ')}</td><td><span className="status-chip">{scan.status}</span></td><td>{scan.initiated_by}</td><td><button className="text-button" onClick={() => void openScan(scan)}>Inspect <ChevronRight size={14} /></button></td></tr>)}
+              </tbody></table>{scans.length === 0 && <EmptyState title="No scan history" detail="Authorized scan jobs and their outcomes will appear here." />}</div>
+              {selectedScan && <div className="scan-result"><div className="scan-result-heading"><strong>Scan result · {selectedScan.target}</strong><button className="text-button" onClick={() => setSelectedScan(null)}>Close</button></div><p>Status: {selectedScan.status}{selectedScan.result ? ` · Host: ${selectedScan.result.host_status}` : ''}{selectedScan.completed_at ? ` · Completed ${formatTime(selectedScan.completed_at)}` : ''}</p>{selectedScan.error && <p className="text-red">{selectedScan.error}</p>}{selectedScan.result?.open_ports.length ? <div className="table-scroll"><table><thead><tr><th>PORT</th><th>PROTOCOL</th><th>SERVICE</th><th>PRODUCT / VERSION</th></tr></thead><tbody>{selectedScan.result.open_ports.map((port) => <tr key={`${port.protocol}-${port.port}`}><td>{port.port}</td><td>{port.protocol}</td><td>{port.service ?? '—'}</td><td>{[port.product, port.version].filter(Boolean).join(' ') || '—'}</td></tr>)}</tbody></table></div> : selectedScan.result && <p>No open ports were returned.</p>}</div>}
+            </div>
           </section>}
 
           {view === 'analysts' && <section className="panel data-panel">

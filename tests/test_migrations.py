@@ -103,6 +103,8 @@ def test_initial_migration_creates_current_sqlite_schema(tmp_path: Path) -> None
             "nmap_scans",
             "network_events",
             "security_alerts",
+            "sensors",
+            "sensors",
             "users",
         } <= tables
     finally:

@@ -19,7 +19,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Respo
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.responses import JSONResponse
 
@@ -45,6 +45,7 @@ from backend.app.database import (
     IncidentRow,
     IntegrationDeliveryRow,
     NmapScanRow,
+    SensorRow,
     SessionLocal,
     UserRow,
     create_tables,
@@ -71,6 +72,13 @@ from backend.app.scanner import (
     load_configuration as load_nmap_configuration,
 )
 from backend.app.schemas import NetworkEvent
+from backend.app.sensors import (
+    MAX_SENSOR_COUNT,
+    SensorConfigurationError,
+    SensorManager,
+    sensor_payload,
+    validate_log_path,
+)
 
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
@@ -245,6 +253,14 @@ class NmapScanCreate(BaseModel):
     confirm_authorized: Literal[True]
 
 
+class SensorCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    sensor_type: Literal["zeek", "suricata"]
+    log_path: str = Field(min_length=1, max_length=1024)
+
+
 def _record_audit(session: Session, entity_type: str, entity_id: str, action: str, actor: str, details: dict) -> None:
     session.add(
         AuditLogRow(
@@ -304,7 +320,11 @@ def _validate_assignee(session: Session, username: str | None) -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     create_tables()
-    yield
+    sensor_manager.start_persisted_sensors()
+    try:
+        yield
+    finally:
+        sensor_manager.stop_all()
 
 
 app = FastAPI(title="Port Scan Detection Lab API", version="0.1.0", description="Offline-first local SOC telemetry and detection API.", lifespan=lifespan)
@@ -503,6 +523,9 @@ def _persist(session: Session, events: list[NetworkEvent]) -> tuple[int, list[di
                 returned_alerts,
             )
     return len(fresh), returned_alerts
+
+
+sensor_manager = SensorManager(SessionLocal, _persist)
 
 
 @app.get("/health")
@@ -873,6 +896,95 @@ def update_incident(
     )
     session.commit()
     return _incident_payload(row)
+
+
+@app.get("/api/sensors")
+def list_sensors(
+    _: Annotated[UserRow, Depends(require_read)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    sensors = session.scalars(select(SensorRow).order_by(SensorRow.name).limit(MAX_SENSOR_COUNT)).all()
+    return {"items": [sensor_payload(sensor) for sensor in sensors]}
+
+
+@app.post("/api/sensors", status_code=201)
+def create_sensor(
+    sensor_data: SensorCreate,
+    actor: Annotated[UserRow, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    if session.scalar(select(func.count()).select_from(SensorRow)) >= MAX_SENSOR_COUNT:
+        raise HTTPException(status_code=409, detail="Maximum configured sensor count reached")
+    try:
+        normalized_path = validate_log_path(sensor_data.log_path, sensor_data.sensor_type)
+    except SensorConfigurationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    now = datetime.now(timezone.utc)
+    row = SensorRow(
+        id=str(uuid4()),
+        name=sensor_data.name,
+        sensor_type=sensor_data.sensor_type,
+        log_path=str(normalized_path),
+        status="stopped",
+        cursor_offset=0,
+        file_identity=None,
+        pending_line="",
+        zeek_header=None,
+        processed_records=0,
+        parse_error_count=0,
+        last_error=None,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    _record_audit(
+        session,
+        "sensor",
+        row.id,
+        "created",
+        actor.username,
+        {"name": row.name, "sensor_type": row.sensor_type, "log_name": normalized_path.name},
+    )
+    try:
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="A sensor with this name already exists") from error
+    return sensor_payload(row)
+
+
+@app.post("/api/sensors/{sensor_id}/start")
+def start_sensor(
+    sensor_id: str,
+    actor: Annotated[UserRow, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    try:
+        row = sensor_manager.start(sensor_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except SensorConfigurationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    _record_audit(session, "sensor", row.id, "started", actor.username, {"name": row.name})
+    session.commit()
+    return sensor_payload(row)
+
+
+@app.post("/api/sensors/{sensor_id}/stop")
+def stop_sensor(
+    sensor_id: str,
+    actor: Annotated[UserRow, Depends(require_admin)],
+    session: Annotated[Session, Depends(get_db)],
+) -> dict:
+    try:
+        row = sensor_manager.stop(sensor_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    _record_audit(session, "sensor", row.id, "stopped", actor.username, {"name": row.name})
+    session.commit()
+    return sensor_payload(row)
 
 
 @app.get("/api/nmap/status")
