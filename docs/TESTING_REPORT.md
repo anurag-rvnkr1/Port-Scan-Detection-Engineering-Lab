@@ -16,7 +16,7 @@ Date: 2026-11-01
 | `.venv/bin/pip-audit -r requirements.lock` | Passed | No known vulnerabilities in the pinned Python dependency set after upgrading AnyIO, Starlette, and pytest. |
 | `npm audit --omit=dev` | Passed | No known production dependency vulnerabilities. |
 | `npm audit --audit-level=high` | Passed at configured threshold | No high/critical findings; npm reports 16 moderate findings in development lint-tool dependencies (`minimatch`). `npm audit fix --force` recommends a breaking ESLint downgrade, so it was not applied. |
-| `npm run test:e2e` | 1 passed | Chromium browser workflow: administrator sign-in, create analyst, generate detections, investigate and assign alert, create/update incident, verify audit actor, download PDF. |
+| `npm run test:e2e` | 1 passed | Chromium browser workflow: administrator sign-in, create analyst, generate detections, register/start a Suricata log tailer, verify the normalized event appears, verify Nmap history/readiness with active scanning disabled, stop the tailer, investigate and assign an alert, create/update an incident, verify audit actor, and download a PDF. |
 | PostgreSQL 17 Docker integration check | Passed | Fresh container, Alembic upgrade/check, and FastAPI `/health` database connectivity; temporary container was stopped and removed. |
 | `docker compose --env-file .env.example config --quiet` | Passed | Compose schema/interpolation validation; no containers started. |
 | Docker Compose deployment smoke test | Passed | Fresh PostgreSQL/API/frontend stack built and started; all services became healthy, migration `3c42d52ef091` applied, the API confirmed database connectivity, Nmap 7.95 was installed while scans remained disabled by default, frontend returned 200, and an authenticated admin registered, started, and stopped a Suricata-format file tailer. The resulting normalized event was retrieved from the API. API port was not published; frontend bound to `127.0.0.1:3017`. The test stack and its temporary volumes were removed afterward. |
@@ -38,6 +38,7 @@ The current backend and frontend checks were rerun after implementation changes.
 - An API configured for non-loopback HTTP cookies with the loopback-proxy opt-in rejects non-loopback CORS origins.
 - Nmap tests verify private/loopback CIDR authorization, rejection of external/hostname/command-injection targets, restricted argument construction, timeout propagation, XML service parsing, scan-history persistence, authenticated actor attribution, and disabled-by-default behavior. The process is mocked; no packets were sent.
 - Sensor tests verify directory allowlisting and symlink rejection, incremental Suricata and Zeek parsing, partial-line buffering, distinct IDs for identical repeated lines, record-per-poll backpressure, oversized-line rejection, persisted cursors/counters, and authenticated create/start/stop operations.
+- Browser E2E verifies that the administrator monitoring controls register and start a real temporary Suricata-format file tail, that its event is retrieved from the persisted event API, and that the tailer can be stopped. It also checks Nmap readiness/history while no authorized target network is configured; it does not initiate a network scan.
 
 ## Not Executed / Not Established
 

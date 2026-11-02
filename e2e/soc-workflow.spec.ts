@@ -37,8 +37,7 @@ test('administrator creates analyst, investigates scan, assigns incident and dow
   await page.getByRole('button', { name: 'Create account' }).click()
   await expect(page.getByRole('cell', { name: 'e2e-analyst' })).toBeVisible()
 
-  const sensorDirectory = process.env.E2E_SENSOR_DIRECTORY
-  if (!sensorDirectory) throw new Error('Playwright E2E sensor directory is missing.')
+  const sensorDirectory = '/tmp/sentinelsoc-e2e-sensors'
   const sensorLogPath = `${sensorDirectory}/eve.json`
   await mkdir(sensorDirectory, { recursive: true })
   await writeFile(sensorLogPath, `${JSON.stringify({
